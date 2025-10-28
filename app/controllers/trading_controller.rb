@@ -58,21 +58,81 @@ class TradingController < ApplicationController
   def quote
     symbol = params[:symbol]&.upcase
 
-    # Use DhanHQ's find_anywhere method to search across all segments
+    # Find the instrument first to get security_id and exchange_segment
     inst = DhanHQ::Models::Instrument.find_anywhere(symbol, exact_match: true)
 
     if inst
+      # Get live quote using MarketFeed.quote
+      pp inst
+      pp inst.exchange_segment
+      pp inst.security_id.to_i
+      quote_response = DhanHQ::Models::MarketFeed.quote(
+        inst.exchange_segment => [inst.security_id.to_i]
+      )
+
+      pp quote_response
+      # Extract the actual quote data from nested response
+      quote_data = quote_response.dig('data', inst.exchange_segment, inst.security_id)
+
       render json: {
         symbol: inst.symbol_name || inst.underlying_symbol,
         name: inst.display_name || inst.symbol_name,
         security_id: inst.security_id,
         exchange_segment: inst.exchange_segment,
-        instrument_type: inst.instrument,
-        lot_size: inst.lot_size,
-        tick_size: inst.tick_size
+        last_price: quote_data&.dig('last_price'),
+        volume: quote_data&.dig('volume'),
+        ohlc: quote_data&.dig('ohlc'),
+        fifty_two_week_high: quote_data&.dig('52_week_high'),
+        fifty_two_week_low: quote_data&.dig('52_week_low'),
+        average_price: quote_data&.dig('average_price')
       }
     else
       render json: { error: "Symbol #{symbol} not found in any exchange segment" }
+    end
+  rescue StandardError => e
+    render json: { error: e.message }, status: :bad_gateway
+  end
+
+  def historical
+    symbol = params[:symbol]&.upcase
+    timeframe = params[:timeframe] || 'intraday' # 'intraday' or 'daily'
+    interval = params[:interval] || '15' # minutes for intraday
+    from_date = params[:from_date] || 7.days.ago.strftime('%Y-%m-%d')
+    to_date = params[:to_date] || Date.today.strftime('%Y-%m-%d')
+
+    # Find the instrument
+    inst = DhanHQ::Models::Instrument.find_anywhere(symbol, exact_match: true)
+
+    if inst
+      params_hash = {
+        security_id: inst.security_id,
+        exchange_segment: inst.exchange_segment,
+        instrument: inst.instrument,
+        from_date: from_date,
+        to_date: to_date
+      }
+
+      # Add interval for intraday
+      params_hash[:interval] = interval if timeframe == 'intraday'
+
+      # Add expiry_code for F&O
+      params_hash[:expiry_code] = 0 if inst.instrument == 'FUTURES'
+
+      # Get historical data
+      data = if timeframe == 'daily'
+               DhanHQ::Models::HistoricalData.daily(params_hash)
+             else
+               DhanHQ::Models::HistoricalData.intraday(params_hash)
+             end
+
+      render json: {
+        symbol: inst.symbol_name || inst.underlying_symbol,
+        security_id: inst.security_id,
+        timeframe: timeframe,
+        data: data
+      }
+    else
+      render json: { error: "Symbol #{symbol} not found" }
     end
   rescue StandardError => e
     render json: { error: e.message }, status: :bad_gateway

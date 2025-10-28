@@ -162,6 +162,17 @@ export default class extends Controller {
       return this.formatQuote(symbol, data);
     }
 
+    // Get historical data
+    const historicalMatch = prompt.match(/historical data for (\w+)/i);
+    if (historicalMatch) {
+      const symbol = historicalMatch[1];
+      const res = await fetch(
+        `/trading/historical?symbol=${symbol}&timeframe=intraday&interval=15`
+      );
+      const data = await res.json();
+      return this.formatHistoricalData(symbol, data);
+    }
+
     return null;
   }
 
@@ -257,19 +268,142 @@ ACCESS_TOKEN=your_access_token</pre><p class="text-xs text-gray-500 mt-2">Get AP
       return `<p class="text-red-600">❌ Could not fetch quote for ${symbol}: ${data.error}</p>`;
     }
 
+    const lastPrice = data.last_price || 0;
+    const volume = data.volume || 0;
+    const ohlc = data.ohlc || {};
+    const high52w = data.fifty_two_week_high || 0;
+    const low52w = data.fifty_two_week_low || 0;
+
     return `
       <div class="bg-gradient-to-r from-purple-50 to-blue-50 p-4 rounded-lg">
         <h3 class="font-bold text-lg mb-3">${symbol}${
       data.name ? " - " + data.name : ""
     }</h3>
-        <div class="text-center">
+
+        <div class="text-center mb-4">
           <div class="text-xs text-gray-600 mb-1">Last Traded Price</div>
           <div class="text-4xl font-bold">₹${parseFloat(
-            data.ltp || 0
-          ).toLocaleString("en-US", { minimumFractionDigits: 2 })}</div>
+            lastPrice
+          ).toLocaleString("en-US", {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          })}</div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3 text-sm">
+          ${
+            ohlc.open
+              ? `
+          <div>
+            <div class="text-xs text-gray-500">Open</div>
+            <div class="font-semibold">₹${parseFloat(ohlc.open).toFixed(
+              2
+            )}</div>
+          </div>
+          <div>
+            <div class="text-xs text-gray-500">High</div>
+            <div class="font-semibold text-green-600">₹${parseFloat(
+              ohlc.high
+            ).toFixed(2)}</div>
+          </div>
+          <div>
+            <div class="text-xs text-gray-500">Low</div>
+            <div class="font-semibold text-red-600">₹${parseFloat(
+              ohlc.low
+            ).toFixed(2)}</div>
+          </div>
+          <div>
+            <div class="text-xs text-gray-500">Close</div>
+            <div class="font-semibold">₹${parseFloat(ohlc.close).toFixed(
+              2
+            )}</div>
+          </div>
+          `
+              : ""
+          }
+          <div>
+            <div class="text-xs text-gray-500">52W High</div>
+            <div class="text-green-600">₹${parseFloat(high52w).toFixed(2)}</div>
+          </div>
+          <div>
+            <div class="text-xs text-gray-500">52W Low</div>
+            <div class="text-red-600">₹${parseFloat(low52w).toFixed(2)}</div>
+          </div>
+        </div>
+
+        <div class="mt-3 text-xs text-gray-500">
+          Volume: ${volume.toLocaleString()}
         </div>
       </div>
     `;
+  }
+
+  formatHistoricalData(symbol, data) {
+    if (data.error) {
+      return `<p class="text-red-600">❌ Could not fetch historical data for ${symbol}: ${data.error}</p>`;
+    }
+
+    if (!data.data || !data.data.close || data.data.close.length === 0) {
+      return `<p>📊 No historical data available for ${symbol}</p>`;
+    }
+
+    const closes = data.data.close || [];
+    const opens = data.data.open || [];
+    const highs = data.data.high || [];
+    const lows = data.data.low || [];
+    const volumes = data.data.volume || [];
+    const timestamps = data.data.timestamp || [];
+
+    let html = `
+      <div class="bg-gradient-to-r from-blue-50 to-purple-50 p-4 rounded-lg">
+        <h3 class="font-bold text-lg mb-3">${symbol} - ${data.timeframe.toUpperCase()} Data</h3>
+        <p class="text-sm text-gray-600 mb-2">Security ID: ${
+          data.security_id
+        }</p>
+        <div class="overflow-x-auto">
+          <table class="w-full text-xs">
+            <thead>
+              <tr class="border-b">
+                <th class="text-left p-1">Time</th>
+                <th class="text-right p-1">Open</th>
+                <th class="text-right p-1">High</th>
+                <th class="text-right p-1">Low</th>
+                <th class="text-right p-1">Close</th>
+                <th class="text-right p-1">Volume</th>
+              </tr>
+            </thead>
+            <tbody>
+    `;
+
+    // Show last 5 candles
+    const candlesToShow = Math.min(5, closes.length);
+    for (let i = closes.length - candlesToShow; i < closes.length; i++) {
+      const timestamp = timestamps[i]
+        ? new Date(timestamps[i] * 1000).toLocaleTimeString()
+        : "-";
+      html += `
+        <tr class="border-b">
+          <td class="p-1">${timestamp}</td>
+          <td class="text-right p-1">₹${opens[i]?.toFixed(2) || "-"}</td>
+          <td class="text-right p-1">₹${highs[i]?.toFixed(2) || "-"}</td>
+          <td class="text-right p-1">₹${lows[i]?.toFixed(2) || "-"}</td>
+          <td class="text-right p-1 font-semibold">₹${
+            closes[i]?.toFixed(2) || "-"
+          }</td>
+          <td class="text-right p-1">${volumes[i]?.toLocaleString() || "-"}</td>
+        </tr>
+      `;
+    }
+
+    html += `
+            </tbody>
+          </table>
+          <p class="text-xs text-gray-500 mt-2">Showing last ${candlesToShow} of ${closes.length} candles</p>
+        </div>
+      </div>
+    `;
+
+    return html;
   }
 
   addMessage(role, content) {

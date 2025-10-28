@@ -23,4 +23,5 @@ Rails.application.routes.draw do
   get "/trading/positions", to: "trading#positions"
   get "/trading/holdings", to: "trading#holdings"
   get "/trading/quote", to: "trading#quote"
+  get "/trading/historical", to: "trading#historical"
 end
