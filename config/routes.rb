@@ -11,7 +11,16 @@ Rails.application.routes.draw do
 
   # Defines the root path route ("/")
   root "chats#index"
+
+  # General AI Chat
   resources :chats, only: [:create]
   get "/models", to: "chats#models"
   post "/chats/stream", to: "chats#stream"
+
+  # Trading Chat
+  get "/trading", to: "trading#index"
+  get "/trading/account", to: "trading#account_info"
+  get "/trading/positions", to: "trading#positions"
+  get "/trading/holdings", to: "trading#holdings"
+  get "/trading/quote", to: "trading#quote"
 end

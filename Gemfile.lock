@@ -1,3 +1,20 @@
+GIT
+  remote: https://github.com/shubhamtaywade82/dhanhq-client.git
+  revision: 41eb6f8b0b8fbf17e16a8dafaa2bb5f7fd266fb1
+  branch: main
+  specs:
+    DhanHQ (2.1.6)
+      activesupport
+      base64
+      bindata
+      concurrent-ruby
+      csv
+      dry-validation
+      eventmachine
+      faraday
+      faraday_middleware
+      faye-websocket
+
 GEM
   remote: https://rubygems.org/
   specs:
@@ -81,6 +98,7 @@ GEM
     bcrypt_pbkdf (1.1.1-x86_64-darwin)
     benchmark (0.5.0)
     bigdecimal (3.3.1)
+    bindata (2.5.1)
     bindex (0.8.1)
     bootsnap (1.18.6)
       msgpack (~> 1.2)
@@ -90,6 +108,7 @@ GEM
     concurrent-ruby (1.3.5)
     connection_pool (2.5.4)
     crass (1.0.6)
+    csv (3.3.5)
     date (3.4.1)
     debug (1.11.0)
       irb (~> 1.10)
@@ -100,20 +119,58 @@ GEM
       dotenv (= 3.1.8)
       railties (>= 6.1)
     drb (2.2.3)
+    dry-configurable (1.3.0)
+      dry-core (~> 1.1)
+      zeitwerk (~> 2.6)
+    dry-core (1.1.0)
+      concurrent-ruby (~> 1.0)
+      logger
+      zeitwerk (~> 2.6)
+    dry-inflector (1.2.0)
+    dry-initializer (3.2.0)
+    dry-logic (1.6.0)
+      bigdecimal
+      concurrent-ruby (~> 1.0)
+      dry-core (~> 1.1)
+      zeitwerk (~> 2.6)
+    dry-schema (1.14.1)
+      concurrent-ruby (~> 1.0)
+      dry-configurable (~> 1.0, >= 1.0.1)
+      dry-core (~> 1.1)
+      dry-initializer (~> 3.2)
+      dry-logic (~> 1.5)
+      dry-types (~> 1.8)
+      zeitwerk (~> 2.6)
+    dry-types (1.8.3)
+      bigdecimal (~> 3.0)
+      concurrent-ruby (~> 1.0)
+      dry-core (~> 1.0)
+      dry-inflector (~> 1.0)
+      dry-logic (~> 1.4)
+      zeitwerk (~> 2.6)
+    dry-validation (1.11.1)
+      concurrent-ruby (~> 1.0)
+      dry-core (~> 1.1)
+      dry-initializer (~> 3.2)
+      dry-schema (~> 1.14)
+      zeitwerk (~> 2.6)
     ed25519 (1.4.0)
     erb (5.1.3)
     erubi (1.13.1)
     et-orbi (1.4.0)
       tzinfo
     event_stream_parser (1.0.0)
-    faraday (2.14.0)
-      faraday-net_http (>= 2.0, < 3.5)
-      json
-      logger
+    eventmachine (1.2.7)
+    faraday (1.2.0)
+      multipart-post (>= 1.2, < 3)
+      ruby2_keywords
     faraday-multipart (1.1.1)
       multipart-post (~> 2.0)
-    faraday-net_http (3.4.1)
-      net-http (>= 0.5.0)
+    faraday_middleware (1.2.1)
+      faraday (~> 1.0)
+    faye-websocket (0.12.0)
+      eventmachine (>= 0.12.0)
+      websocket-driver (>= 0.8.0)
     ffi (1.17.2-aarch64-linux-gnu)
     ffi (1.17.2-aarch64-linux-musl)
     ffi (1.17.2-arm-linux-gnu)
@@ -182,8 +239,6 @@ GEM
     minitest (5.26.0)
     msgpack (1.8.0)
     multipart-post (2.4.1)
-    net-http (0.6.0)
-      uri
     net-imap (0.5.12)
       date
       net-protocol
@@ -326,6 +381,8 @@ GEM
       faraday (>= 1)
       faraday-multipart (>= 1)
     ruby-progressbar (1.13.0)
+    ruby-technical-analysis (1.0.4)
+    ruby2_keywords (0.0.5)
     securerandom (0.4.1)
     solid_cable (3.0.12)
       actioncable (>= 7.2)
@@ -351,6 +408,7 @@ GEM
       net-ssh (>= 2.8.0)
       ostruct
     stringio (3.1.7)
+    technical-analysis (0.2.4)
     thor (1.4.0)
     thruster (0.1.16)
     thruster (0.1.16-aarch64-linux)
@@ -390,10 +448,12 @@ PLATFORMS
   x86_64-linux-musl
 
 DEPENDENCIES
+  DhanHQ!
   bootsnap
   brakeman
   debug
   dotenv-rails
+  faraday-multipart
   http
   jbuilder
   jsbundling-rails
@@ -408,9 +468,11 @@ DEPENDENCIES
   rubocop-rails
   rubocop-rails-omakase
   ruby-openai
+  ruby-technical-analysis
   solid_cable
   solid_cache
   solid_queue
+  technical-analysis (~> 0.2)
   thruster
   tzinfo-data
   web-console

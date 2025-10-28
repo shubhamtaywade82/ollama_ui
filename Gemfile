@@ -62,3 +62,9 @@ gem "ruby-openai"     # for Ollama HTTP calls via OpenAI API compatibility
 gem "http"            # for Ollama /api/tags endpoint
 gem "dotenv-rails"    # env vars in development/test
 gem "rack-cors"       # if you later split frontend (not required for same-origin)
+
+# Trading/Broker APIs - DhanHQ for Indian markets
+gem "DhanHQ", git: "https://github.com/shubhamtaywade82/dhanhq-client.git", branch: "main"
+gem "ruby-technical-analysis" # Optional: Technical analysis for DhanHQ (any version)
+gem "technical-analysis", "~> 0.2" # Optional: Additional indicators
+gem "faraday-multipart" # Required for DhanHQ file uploads
