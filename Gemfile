@@ -45,9 +45,20 @@ group :development, :test do
 
   # Omakase Ruby styling [https://github.com/rails/rubocop-rails-omakase/]
   gem "rubocop-rails-omakase", require: false
+
+  # Ruby linting
+  gem "rubocop", require: false
+  gem "rubocop-rails", require: false
+  gem "rubocop-performance", require: false
 end
 
 group :development do
   # Use console on exceptions pages [https://github.com/rails/web-console]
   gem "web-console"
 end
+
+# Ollama provider gem (using ruby-openai for OpenAI-compatible API)
+gem "ruby-openai"     # for Ollama HTTP calls via OpenAI API compatibility
+gem "http"            # for Ollama /api/tags endpoint
+gem "dotenv-rails"    # env vars in development/test
+gem "rack-cors"       # if you later split frontend (not required for same-origin)

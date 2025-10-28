@@ -1,5 +1,8 @@
 require_relative "boot"
 
+# Load environment variables BEFORE requiring Rails
+require "dotenv/rails-now" if defined?(Dotenv)
+
 require "rails"
 # Pick the frameworks you want:
 require "active_model/railtie"
