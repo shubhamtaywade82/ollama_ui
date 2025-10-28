@@ -67,4 +67,3 @@ gem "rack-cors"       # if you later split frontend (not required for same-origi
 gem "DhanHQ", git: "https://github.com/shubhamtaywade82/dhanhq-client.git", branch: "main"
 gem "ruby-technical-analysis" # Optional: Technical analysis for DhanHQ (any version)
 gem "technical-analysis", "~> 0.2" # Optional: Additional indicators
-gem "faraday-multipart" # Required for DhanHQ file uploads

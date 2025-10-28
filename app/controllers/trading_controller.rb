@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require 'dhan_hq'
-
 class TradingController < ApplicationController
   protect_from_forgery with: :null_session
 
@@ -11,6 +9,8 @@ class TradingController < ApplicationController
 
   def account_info
     fund = DhanHQ::Models::Funds.fetch
+
+    pp fund
     render json: {
       equity: fund.available_balance.to_f,
       buying_power: fund.available_balance.to_f,
@@ -58,23 +58,23 @@ class TradingController < ApplicationController
 
   def quote
     symbol = params[:symbol]&.upcase
-    segments = [{ segment: 'NSE_EQ' }, { segment: 'BSE_EQ' }, { segment: 'NSE_FNO' }, { segment: 'BSE_FNO' }]
 
-    segments.each do |config|
-      inst = DhanHQ::Models::Instrument.find(config[:segment], symbol)
-      if inst
-        render json: {
-          symbol: inst.symbol,
-          name: inst.trading_symbol || inst.symbol,
-          ltp: inst.last_price&.to_f || 0,
-          security_id: inst.security_id,
-          exchange_segment: config[:segment]
-        }
-        return
-      end
+    # Use DhanHQ's find_anywhere method to search across all segments
+    inst = DhanHQ::Models::Instrument.find_anywhere(symbol, exact_match: true)
+
+    if inst
+      render json: {
+        symbol: inst.symbol_name || inst.underlying_symbol,
+        name: inst.display_name || inst.symbol_name,
+        security_id: inst.security_id,
+        exchange_segment: inst.exchange_segment,
+        instrument_type: inst.instrument,
+        lot_size: inst.lot_size,
+        tick_size: inst.tick_size
+      }
+    else
+      render json: { error: "Symbol #{symbol} not found in any exchange segment" }
     end
-
-    render json: { error: "Symbol #{symbol} not found" }
   rescue StandardError => e
     render json: { error: e.message }, status: :bad_gateway
   end
