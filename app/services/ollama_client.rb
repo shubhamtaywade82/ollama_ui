@@ -51,4 +51,55 @@ class OllamaClient
     puts "DEBUG: Chat error: #{e.class} - #{e.message}"
     raise "Failed to chat with Ollama: #{e.message}"
   end
+
+  def chat_stream(model:, prompt:, &block)
+    require 'net/http'
+    require 'uri'
+    require 'json'
+
+    uri = URI("#{OLLAMA_HOST}/api/generate")
+    body = {
+      model: model,
+      prompt: prompt,
+      stream: true
+    }
+
+    puts "DEBUG: Starting stream to #{uri}"
+
+    http = Net::HTTP.new(uri.host, uri.port)
+    http.read_timeout = 300
+    http.use_ssl = false
+
+    request = Net::HTTP::Post.new(uri.path)
+    request['Content-Type'] = 'application/json'
+    request.body = body.to_json
+
+    http.request(request) do |response|
+      response.read_body do |chunk|
+        chunk.lines.each do |line|
+          line = line.strip
+          next if line.empty?
+
+          puts "DEBUG: Received: #{line[0..100]}..."
+
+          begin
+            data = JSON.parse(line)
+            if data['response']
+              block.call({ type: 'content', text: data['response'] })
+            end
+            if data['done'] == true
+              puts "DEBUG: Stream complete"
+              break
+            end
+          rescue JSON::ParserError => e
+            puts "DEBUG: Parse error: #{e.message}"
+          end
+        end
+      end
+    end
+  rescue StandardError => e
+    puts "DEBUG: Stream error: #{e.class} - #{e.message}"
+    puts e.backtrace.first(5)
+    raise "Failed to stream from Ollama: #{e.message}"
+  end
 end

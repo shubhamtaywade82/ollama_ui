@@ -9,7 +9,9 @@
   },
   "dependencies": {
     "@hotwired/stimulus": "^3.2.2",
-    "@hotwired/turbo-rails": "^8.0.18"
+    "@hotwired/turbo-rails": "^8.0.18",
+    "@tailwindcss/typography": "^0.5.19",
+    "marked": "^16.4.1"
   },
   "scripts": {
     "build": "esbuild app/javascript/*.* --bundle --sourcemap --outdir=app/assets/builds --public-path=/assets && npm run build:css",

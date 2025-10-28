@@ -13,4 +13,5 @@ Rails.application.routes.draw do
   root "chats#index"
   resources :chats, only: [:create]
   get "/models", to: "chats#models"
+  post "/chats/stream", to: "chats#stream"
 end
