@@ -8,9 +8,19 @@ marked.setOptions({
 });
 
 export default class extends Controller {
-  static targets = ["model", "prompt", "output", "sendBtn", "loading"];
+  static targets = [
+    "model",
+    "prompt",
+    "output",
+    "sendBtn",
+    "loading",
+    "messages",
+    "messagesContainer",
+    "modelName",
+  ];
 
   connect() {
+    this.conversationHistory = [];
     this.loadModels();
   }
 
@@ -22,11 +32,6 @@ export default class extends Controller {
       const res = await fetch("/models");
       const json = await res.json();
       if (json.error) throw new Error(json.error);
-
-      const placeholder = document.createElement("option");
-      placeholder.value = "";
-      placeholder.textContent = "Select a model…";
-      this.modelTarget.appendChild(placeholder);
 
       if (json.models.length === 0) {
         const opt = document.createElement("option");
@@ -42,6 +47,16 @@ export default class extends Controller {
           opt.textContent = m;
           this.modelTarget.appendChild(opt);
         });
+
+        // Set default to qwen model
+        const qwenModel =
+          json.models.find((m) => m.includes("qwen")) || json.models[0];
+        this.modelTarget.value = qwenModel;
+
+        // Update model name display
+        if (this.modelNameTarget) {
+          this.modelNameTarget.textContent = `${qwenModel} • Ready`;
+        }
       }
     } catch (e) {
       console.error(e);
@@ -57,7 +72,6 @@ export default class extends Controller {
 
   async submit(event) {
     event.preventDefault();
-    this.outputTarget.innerHTML = "";
     this.accumulatedText = "";
     const model = this.modelTarget.value;
     const prompt = this.promptTarget.value;
@@ -68,9 +82,20 @@ export default class extends Controller {
     }
 
     this.sendBtnTarget.disabled = true;
-    const sendText = this.sendBtnTarget.querySelector(".send-text");
-    if (sendText) sendText.textContent = "Thinking…";
-    this.sendBtnTarget.classList.add("cursor-wait");
+    this.promptTarget.disabled = true;
+
+    // Add user message
+    const userMessage = this.addMessage("user", prompt);
+
+    // Add empty AI message for streaming
+    const aiMessage = this.addMessage("assistant", "");
+    this.currentMessageElement = aiMessage;
+
+    // Scroll to bottom
+    this.scrollToBottom();
+
+    // Store in history
+    this.conversationHistory.push({ role: "user", content: prompt });
 
     try {
       const res = await fetch("/chats/stream", {
@@ -108,10 +133,12 @@ export default class extends Controller {
                 if (!this.accumulatedText) this.accumulatedText = "";
                 this.accumulatedText += data.text;
 
-                // Render markdown
+                // Update the current AI message
                 const html = marked.parse(this.accumulatedText);
-                this.outputTarget.innerHTML = html;
-                this.outputTarget.scrollTop = this.outputTarget.scrollHeight;
+                this.currentMessageElement.querySelector(
+                  ".message-content"
+                ).innerHTML = html;
+                this.scrollToBottom();
               } else if (data.error) {
                 throw new Error(data.error);
               }
@@ -121,16 +148,66 @@ export default class extends Controller {
           }
         }
       }
-
-      if (sendText) sendText.textContent = "Send";
     } catch (e) {
       console.error(e);
-      this.outputTarget.innerHTML = `<span class="text-red-400">Error: ${e.message}</span>`;
-      this.outputTarget.classList.add("text-red-300");
+      const errorHtml = `<span class="text-red-400">Error: ${e.message}</span>`;
+      if (this.currentMessageElement) {
+        this.currentMessageElement.querySelector(".message-content").innerHTML =
+          errorHtml;
+      } else {
+        this.addMessage("assistant", errorHtml);
+      }
     } finally {
       this.sendBtnTarget.disabled = false;
-      this.sendBtnTarget.classList.remove("cursor-wait");
+      this.promptTarget.disabled = false;
+      this.promptTarget.value = "";
+
+      // Store response in history
+      if (this.accumulatedText) {
+        this.conversationHistory.push({
+          role: "assistant",
+          content: this.accumulatedText,
+        });
+      }
     }
+  }
+
+  addMessage(role, content) {
+    const messageDiv = document.createElement("div");
+    messageDiv.className =
+      "mb-4 flex " + (role === "user" ? "justify-end" : "justify-start");
+
+    const isAI = role === "assistant";
+    messageDiv.innerHTML = `
+      <div class="flex gap-3 max-w-[85%] ${
+        role === "user" ? "flex-row-reverse" : ""
+      }">
+        <div class="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
+          isAI ? "bg-purple-500" : "bg-blue-500"
+        }">
+          ${isAI ? "🤖" : "👤"}
+        </div>
+        <div class="${isAI ? "bg-white" : "bg-blue-500"} ${
+      isAI ? "text-gray-900" : "text-white"
+    } rounded-2xl px-4 py-3 shadow-sm ${
+      isAI ? "prose prose-sm max-w-none" : ""
+    }">
+          <div class="message-content ${
+            isAI ? "" : "whitespace-pre-wrap"
+          }">${content}</div>
+        </div>
+      </div>
+    `;
+
+    this.messagesTarget.appendChild(messageDiv);
+    return messageDiv;
+  }
+
+  scrollToBottom() {
+    setTimeout(() => {
+      this.messagesContainerTarget.scrollTop =
+        this.messagesContainerTarget.scrollHeight;
+    }, 100);
   }
 
   csrf() {

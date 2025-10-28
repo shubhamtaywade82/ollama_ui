@@ -80,7 +80,7 @@ class OllamaClient
           line = line.strip
           next if line.empty?
 
-          puts "DEBUG: Received: #{line[0..100]}..."
+          # puts "DEBUG: Received: #{line[0..100]}..."
 
           begin
             data = JSON.parse(line)
