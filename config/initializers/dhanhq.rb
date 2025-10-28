@@ -1,10 +1,9 @@
 # frozen_string_literal: true
 
 begin
-  require 'dhan_hq'
-
   # Configure DhanHQ with environment variables
   if ENV['CLIENT_ID'].present? && ENV['ACCESS_TOKEN'].present?
+    require 'dhan_hq'
     DhanHQ.configure_with_env
     DhanHQ.logger.level = (ENV['DHAN_LOG_LEVEL'] || 'INFO').upcase.then { |level| Logger.const_get(level) }
     Rails.logger.info "✅ DhanHQ configured successfully"
