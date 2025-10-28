@@ -10,7 +10,6 @@ class TradingController < ApplicationController
   def account_info
     fund = DhanHQ::Models::Funds.fetch
 
-    pp fund
     render json: {
       equity: fund.available_balance.to_f,
       buying_power: fund.available_balance.to_f,
