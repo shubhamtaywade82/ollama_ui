@@ -453,6 +453,7 @@ DEPENDENCIES
   brakeman
   debug
   dotenv-rails
+  faraday_middleware
   http
   jbuilder
   jsbundling-rails
