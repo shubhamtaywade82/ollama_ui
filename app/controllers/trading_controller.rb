@@ -63,14 +63,10 @@ class TradingController < ApplicationController
 
     if inst
       # Get live quote using MarketFeed.quote
-      pp inst
-      pp inst.exchange_segment
-      pp inst.security_id.to_i
       quote_response = DhanHQ::Models::MarketFeed.quote(
         inst.exchange_segment => [inst.security_id.to_i]
       )
 
-      pp quote_response
       # Extract the actual quote data from nested response
       quote_data = quote_response.dig('data', inst.exchange_segment, inst.security_id)
 
@@ -91,6 +87,27 @@ class TradingController < ApplicationController
     end
   rescue StandardError => e
     render json: { error: e.message }, status: :bad_gateway
+  end
+
+  def agent
+    user_prompt = params[:prompt].to_s
+
+    # Use the DhanTradingAgent to process the prompt
+    agent = DhanTradingAgent.new(prompt: user_prompt)
+    result = agent.execute
+
+    render json: {
+      type: result[:type],
+      message: result[:message],
+      formatted: result[:formatted],
+      data: result[:data]
+    }
+  rescue StandardError => e
+    render json: {
+      type: :error,
+      message: "Agent error: #{e.message}",
+      formatted: "❌ Error: #{e.message}"
+    }, status: :bad_gateway
   end
 
   def historical

@@ -24,4 +24,5 @@ Rails.application.routes.draw do
   get "/trading/holdings", to: "trading#holdings"
   get "/trading/quote", to: "trading#quote"
   get "/trading/historical", to: "trading#historical"
+  post "/trading/agent", to: "trading#agent"  # AI Agent endpoint
 end

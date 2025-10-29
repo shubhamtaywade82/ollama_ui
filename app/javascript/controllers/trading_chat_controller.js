@@ -18,6 +18,23 @@ export default class extends Controller {
 
   connect() {
     this.loadAccountInfo();
+    this.setupTextareaEnterHandler();
+  }
+
+  setupTextareaEnterHandler() {
+    // Handle Enter key - submit, Shift+Enter for new line
+    this.promptTarget.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        // Find the form and trigger submit
+        const form = this.element.querySelector("form");
+        if (form) {
+          form.dispatchEvent(
+            new Event("submit", { bubbles: true, cancelable: true })
+          );
+        }
+      }
+    });
   }
 
   async loadAccountInfo() {
@@ -65,7 +82,17 @@ export default class extends Controller {
     this.scrollToBottom();
 
     try {
-      // Parse trading commands
+      // Try agent first (smart LLM-based routing)
+      const agentResponse = await this.tryAgent(prompt);
+
+      if (agentResponse) {
+        this.currentMessageElement.querySelector(".message-content").innerHTML =
+          agentResponse.formatted || agentResponse;
+        this.scrollToBottom();
+        return;
+      }
+
+      // Fallback to pattern matching
       const tradingResponse = await this.handleTradingCommand(prompt);
 
       if (tradingResponse) {
@@ -126,7 +153,31 @@ export default class extends Controller {
       this.sendBtnTarget.disabled = false;
       this.promptTarget.disabled = false;
       this.promptTarget.value = "";
+      this.promptTarget.style.height = "auto"; // Reset textarea height
     }
+  }
+
+  async tryAgent(prompt) {
+    // Try the intelligent agent endpoint
+    try {
+      const res = await fetch("/trading/agent", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": this.csrf(),
+        },
+        body: JSON.stringify({ prompt: prompt }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        return data;
+      }
+    } catch (e) {
+      console.log("Agent not available, falling back to pattern matching");
+    }
+
+    return null;
   }
 
   async handleTradingCommand(prompt) {
@@ -153,24 +204,74 @@ export default class extends Controller {
       return this.formatHoldings(data.holdings || []);
     }
 
-    // Get quote
-    const quoteMatch = prompt.match(/quote for (\w+)/i);
-    if (quoteMatch) {
-      const symbol = quoteMatch[1];
-      const res = await fetch(`/trading/quote?symbol=${symbol}`);
-      const data = await res.json();
-      return this.formatQuote(symbol, data);
+    // Get quote - handle multiple patterns
+    if (
+      lowerPrompt.includes("quote") ||
+      lowerPrompt.includes("price") ||
+      lowerPrompt.includes("current price") ||
+      lowerPrompt.includes("ltp") ||
+      lowerPrompt.includes("show me") ||
+      lowerPrompt.includes("what is the price")
+    ) {
+      // Try to extract symbol from prompt
+      const patterns = [
+        // Pattern 1: "show me current price of TCS" or "price of TCS"
+        /(?:show\s+me\s+)?(?:current\s+)?(?:price|quote|ltp)\s+of\s+(\w+)/i,
+        // Pattern 2: "what is the price of TCS"
+        /what\s+is\s+(?:the\s+)?(?:current\s+)?(?:price|quote)\s+of\s+(\w+)/i,
+        // Pattern 3: "TCS price"
+        /(\w+)\s+(?:price|quote|ltp)/i,
+        // Pattern 4: Any uppercase word in the prompt
+        /\b([A-Z]{3,})\b/g,
+      ];
+
+      let symbol = null;
+
+      // Try first 3 patterns (specific)
+      for (let i = 0; i < 3; i++) {
+        const match = prompt.match(patterns[i]);
+        if (match && match[1]) {
+          symbol = match[1].toUpperCase();
+          break;
+        }
+      }
+
+      // If no symbol found, extract last uppercase word
+      if (!symbol) {
+        const allMatches = prompt.match(patterns[3]);
+        if (allMatches && allMatches.length > 0) {
+          // Get the last uppercase word (most likely the symbol)
+          symbol = allMatches[allMatches.length - 1].toUpperCase();
+        }
+      }
+
+      if (symbol) {
+        const res = await fetch(`/trading/quote?symbol=${symbol}`);
+        const data = await res.json();
+        return this.formatQuote(symbol, data);
+      }
     }
 
-    // Get historical data
-    const historicalMatch = prompt.match(/historical data for (\w+)/i);
-    if (historicalMatch) {
-      const symbol = historicalMatch[1];
-      const res = await fetch(
-        `/trading/historical?symbol=${symbol}&timeframe=intraday&interval=15`
-      );
-      const data = await res.json();
-      return this.formatHistoricalData(symbol, data);
+    // Get historical data - handle multiple patterns
+    if (
+      lowerPrompt.includes("historical") ||
+      lowerPrompt.includes("ohlc") ||
+      lowerPrompt.includes("candle") ||
+      lowerPrompt.includes("chart")
+    ) {
+      const symbolPattern =
+        /(?:historical|ohlc|candle|chart).*(?:for|of)\s+(\w+)/i;
+      const match = prompt.match(symbolPattern);
+
+      if (match) {
+        const symbol = match[1].toUpperCase();
+        const timeframe = lowerPrompt.includes("daily") ? "daily" : "intraday";
+        const res = await fetch(
+          `/trading/historical?symbol=${symbol}&timeframe=${timeframe}&interval=15`
+        );
+        const data = await res.json();
+        return this.formatHistoricalData(symbol, data);
+      }
     }
 
     return null;
