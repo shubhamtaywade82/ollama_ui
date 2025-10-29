@@ -22,6 +22,23 @@ export default class extends Controller {
   connect() {
     this.conversationHistory = [];
     this.loadModels();
+    this.setupTextareaEnterHandler();
+  }
+
+  setupTextareaEnterHandler() {
+    // Handle Enter key - submit, Shift+Enter for new line
+    this.promptTarget.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        // Find the form and trigger submit
+        const form = this.element.querySelector("form");
+        if (form) {
+          form.dispatchEvent(
+            new Event("submit", { bubbles: true, cancelable: true })
+          );
+        }
+      }
+    });
   }
 
   async loadModels() {
