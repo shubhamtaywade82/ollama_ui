@@ -83,13 +83,13 @@
         <div class="flex-1 relative">
           <textarea data-chat-target="prompt" rows="1"
             placeholder="Message AI..."
-            class="w-full rounded-xl border px-4 py-3 pr-24 placeholder-gray-400 focus:outline-none focus:ring-2 focus:border-transparent resize-none max-h-32 transition"
-            style="border-color: var(--border-color); color: var(--text-primary); background-color: var(--bg-secondary); overflow-y: auto;"
+            class="w-full rounded-xl border px-4 py-3 pr-24 placeholder-gray-400 focus:outline-none focus:ring-2 focus:border-transparent resize-none overflow-hidden transition"
+            style="border-color: var(--border-color); color: var(--text-primary); background-color: var(--bg-secondary); min-height: 3rem; max-height: 12rem; line-height: 1.5rem;"
             onfocus="this.style.setProperty('--tw-ring-color', 'var(--accent-primary)')"></textarea>
-          <div class="absolute right-2 bottom-2 text-xs" data-theme-text-tertiary style="color: var(--text-tertiary);">Enter to send, Shift+Enter for new line</div>
+          <div class="absolute right-2 bottom-2 text-xs pointer-events-none" data-theme-text-tertiary style="color: var(--text-tertiary);">Enter to send, Shift+Enter for new line</div>
         </div>
         <button data-chat-target="sendBtn" type="submit"
-          class="rounded-xl text-white px-4 py-3 disabled:opacity-50 disabled:cursor-not-allowed transition shadow-md hover:shadow-lg disabled:hover:shadow-md"
+          class="rounded-xl text-white h-12 w-12 flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed transition shadow-md hover:shadow-lg disabled:hover:shadow-md flex-shrink-0"
           style="background: linear-gradient(to right, var(--accent-primary), var(--accent-secondary));">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>

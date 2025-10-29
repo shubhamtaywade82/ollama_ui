@@ -19,6 +19,7 @@ export default class extends Controller {
   connect() {
     this.loadAccountInfo();
     this.setupTextareaEnterHandler();
+    this.setupTextareaAutoResize();
   }
 
   setupTextareaEnterHandler() {
@@ -35,6 +36,40 @@ export default class extends Controller {
         }
       }
     });
+  }
+
+  setupTextareaAutoResize() {
+    const textarea = this.promptTarget;
+
+    // Initial resize
+    this.resizeTextarea();
+
+    // Auto-resize on input
+    textarea.addEventListener("input", () => {
+      this.resizeTextarea();
+    });
+  }
+
+  resizeTextarea() {
+    const textarea = this.promptTarget;
+    // Reset height to auto to get the correct scrollHeight
+    textarea.style.height = "auto";
+
+    // Calculate the new height based on scrollHeight
+    const scrollHeight = textarea.scrollHeight;
+    const minHeight = 48; // 3rem = 48px
+    const maxHeight = 192; // 12rem = 192px
+
+    // Set the height, but limit to max-height
+    const newHeight = Math.min(Math.max(scrollHeight, minHeight), maxHeight);
+    textarea.style.height = `${newHeight}px`;
+
+    // Show scrollbar if content exceeds max height
+    if (scrollHeight > maxHeight) {
+      textarea.style.overflowY = "auto";
+    } else {
+      textarea.style.overflowY = "hidden";
+    }
   }
 
   async loadAccountInfo() {
@@ -153,7 +188,9 @@ export default class extends Controller {
       this.sendBtnTarget.disabled = false;
       this.promptTarget.disabled = false;
       this.promptTarget.value = "";
-      this.promptTarget.style.height = "auto"; // Reset textarea height
+
+      // Reset textarea height after clearing
+      this.resizeTextarea();
     }
   }
 
