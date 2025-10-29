@@ -513,20 +513,23 @@ ACCESS_TOKEN=your_access_token</pre><p class="text-xs text-gray-500 mt-2">Get AP
       "mb-4 flex " + (role === "user" ? "justify-end" : "justify-start");
 
     const isAI = role === "assistant";
+    const avatarBg = isAI
+      ? 'style="background-color: var(--accent-primary);"'
+      : 'style="background: linear-gradient(to right, var(--accent-primary), var(--accent-secondary));"';
+    const messageBg = isAI
+      ? `style="background-color: var(--bg-secondary); color: var(--text-primary);"`
+      : `style="background: linear-gradient(to right, var(--accent-primary), var(--accent-secondary)); color: white;"`;
+
     messageDiv.innerHTML = `
       <div class="flex gap-3 max-w-[85%] ${
         role === "user" ? "flex-row-reverse" : ""
       }">
-        <div class="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
-          isAI ? "bg-green-500" : "bg-blue-500"
-        }">
+        <div class="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center" ${avatarBg}>
           ${isAI ? "💰" : "👤"}
         </div>
-        <div class="${isAI ? "bg-white" : "bg-blue-500"} ${
-      isAI ? "text-gray-900" : "text-white"
-    } rounded-2xl px-4 py-3 shadow-sm ${
-      isAI ? "prose prose-sm max-w-none" : ""
-    }">
+        <div class="rounded-2xl px-4 py-3 shadow-sm ${
+          isAI ? "prose prose-sm max-w-none" : ""
+        }" ${messageBg}>
           <div class="message-content ${
             isAI ? "" : "whitespace-pre-wrap"
           }">${content}</div>
