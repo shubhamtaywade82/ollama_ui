@@ -1,0 +1,33 @@
+# Trading agent risk and configuration defaults
+
+default: &default
+  capital_base: 50000 # ₹50,000
+  per_trade_risk_pct: 20 # 20% of option premium as SL
+  target_profit: 30 # ₹25-35 target per trade
+  max_concurrent_positions: 1
+  max_steps_per_run: 10
+
+  # Signal filters
+  filters:
+    min_adx: 20
+    use_supertrend: true
+    avoid_gap_minutes: 1
+
+  # Market hours (IST)
+  market_hours:
+    open: "09:15"
+    close: "15:30"
+
+  # Cooldowns (seconds)
+  cooldowns:
+    step: 1
+    option_chain_cache: 30
+    quote_cache: 5
+
+development:
+  <<: *default
+  live_trading: false
+
+production:
+  <<: *default
+  live_trading: false # Change to true only after thorough testing

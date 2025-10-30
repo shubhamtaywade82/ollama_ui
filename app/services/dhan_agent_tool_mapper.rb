@@ -30,7 +30,7 @@ module DhanAgentToolMapper
     search_instrument: {
       model: 'DhanHQ::Models::Instrument',
       method: 'find_anywhere',
-      params: ['symbol', 'exact_match'],
+      params: %w[symbol exact_match],
       description: 'Search for instrument by symbol across all exchanges'
     },
 
@@ -82,14 +82,14 @@ module DhanAgentToolMapper
     get_historical_intraday: {
       model: 'DhanHQ::Models::HistoricalData',
       method: 'intraday',
-      params: ['security_id', 'exchange_segment', 'instrument', 'interval', 'from_date', 'to_date'],
+      params: %w[security_id exchange_segment instrument interval from_date to_date],
       description: 'Get intraday historical data (1-60 minute candles)'
     },
 
     get_historical_daily: {
       model: 'DhanHQ::Models::HistoricalData',
       method: 'daily',
-      params: ['security_id', 'exchange_segment', 'instrument', 'from_date', 'to_date'],
+      params: %w[security_id exchange_segment instrument from_date to_date],
       description: 'Get daily historical data'
     },
 
@@ -97,7 +97,7 @@ module DhanAgentToolMapper
     get_option_chain: {
       model: 'DhanHQ::Models::OptionChain',
       method: 'fetch',
-      params: ['underlying_scrip', 'underlying_seg', 'expiry'],
+      params: %w[underlying_scrip underlying_seg expiry],
       description: 'Get option chain for underlying stock/indices'
     },
 
@@ -105,7 +105,8 @@ module DhanAgentToolMapper
     place_order: {
       model: 'DhanHQ::Models::Order',
       method: 'create',
-      params: ['transaction_type', 'exchange_segment', 'product_type', 'order_type', 'security_id', 'quantity', 'price'],
+      params: %w[transaction_type exchange_segment product_type order_type security_id quantity
+                 price],
       description: 'Place a new order (market or limit)'
     },
 
@@ -119,7 +120,7 @@ module DhanAgentToolMapper
     modify_order: {
       model: 'DhanHQ::Models::Order',
       method: 'update',
-      params: ['order_id', 'price', 'quantity'],
+      params: %w[order_id price quantity],
       description: 'Modify existing order'
     },
 
@@ -134,7 +135,8 @@ module DhanAgentToolMapper
     place_super_order: {
       model: 'DhanHQ::Models::SuperOrder',
       method: 'create',
-      params: ['transaction_type', 'exchange_segment', 'product_type', 'security_id', 'quantity', 'price', 'target_price', 'stop_loss_price'],
+      params: %w[transaction_type exchange_segment product_type security_id quantity price
+                 target_price stop_loss_price],
       description: 'Place bracket/CO order with target and stop-loss'
     },
 
@@ -148,14 +150,14 @@ module DhanAgentToolMapper
     modify_super_order: {
       model: 'DhanHQ::Models::SuperOrder',
       method: 'update',
-      params: ['order_id', 'leg_name', 'price'],
+      params: %w[order_id leg_name price],
       description: 'Modify super order leg'
     },
 
     cancel_super_order_leg: {
       model: 'DhanHQ::Models::SuperOrder',
       method: 'cancel_leg',
-      params: ['order_id', 'leg_name'],
+      params: %w[order_id leg_name],
       description: 'Cancel specific leg of super order'
     },
 
@@ -171,7 +173,7 @@ module DhanAgentToolMapper
     get_expired_options: {
       model: 'DhanHQ::Models::ExpiredOptionsData',
       method: 'fetch',
-      params: ['from_date', 'to_date'],
+      params: %w[from_date to_date],
       description: 'Get expired options data'
     },
 
@@ -212,14 +214,28 @@ module DhanAgentToolMapper
     model_class = tool[:model].constantize
     method = tool[:method].to_sym
 
+    # Validate required parameters for methods that need them
+    if %i[quote ltp ohlc].include?(method) && params.empty?
+      return { error: "Tool #{tool_name} requires instruments_hash parameter. Cannot execute directly with just symbol." }
+    end
+
     case method
     when :fetch, :all
       model_class.send(method)
     when :create, :update, :cancel, :cancel_leg
       model_class.new(**params).save
     else
+      # For quote/ltp/ohlc methods, ensure we have the instruments_hash
+      # Try to construct from other params if symbol provided
+      if %i[quote ltp ohlc].include?(method) && params[:instruments_hash].nil? && params[:symbol] && params[:segment]
+        # This shouldn't be called directly - should use workflow instead
+        return { error: "Cannot execute #{tool_name} without instruments_hash. Use workflow instead." }
+      end
+
       model_class.send(method, **params)
     end
+  rescue ArgumentError => e
+    { error: "Wrong number of arguments for #{tool_name}: #{e.message}" }
   end
 
   private
@@ -237,4 +253,3 @@ module DhanAgentToolMapper
     end
   end
 end
-

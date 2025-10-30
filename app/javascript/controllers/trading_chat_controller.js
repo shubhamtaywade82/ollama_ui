@@ -121,8 +121,27 @@ export default class extends Controller {
       const agentResponse = await this.tryAgent(prompt);
 
       if (agentResponse) {
-        this.currentMessageElement.querySelector(".message-content").innerHTML =
-          agentResponse.formatted || agentResponse;
+        // Handle different response formats
+        let content = '';
+        if (agentResponse.formatted) {
+          content = agentResponse.formatted;
+        } else if (agentResponse.data) {
+          // If formatted is missing but data exists, try to format it
+          if (typeof agentResponse.data === 'object') {
+            content = `<pre class="text-xs overflow-auto">${JSON.stringify(agentResponse.data, null, 2)}</pre>`;
+          } else {
+            content = String(agentResponse.data);
+          }
+        } else if (agentResponse.message) {
+          content = agentResponse.message;
+        } else if (typeof agentResponse === 'string') {
+          content = agentResponse;
+        } else {
+          // Fallback: show error message with object details
+          content = `<div class="text-yellow-600">⚠️ Response received but format unexpected</div><pre class="text-xs overflow-auto">${JSON.stringify(agentResponse, null, 2)}</pre>`;
+        }
+
+        this.currentMessageElement.querySelector(".message-content").innerHTML = content;
         this.scrollToBottom();
         return;
       }

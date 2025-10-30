@@ -9,50 +9,91 @@ class DhanTradingAgent
 
   # Main method to process user prompt and return response
   def execute
+    Rails.logger.info "🎯 DhanTradingAgent.execute: '#{@prompt}'"
+
     # Check if we need iterative refinement for complex tasks
     if requires_iteration?
+      Rails.logger.info "📋 Using iterative agent"
       return execute_with_iteration
     end
 
     # Use AI to select tool
     intent = understand_intent
+    Rails.logger.info "🧠 Intent: tool=#{intent[:tool]}, action=#{intent[:action]}, symbol=#{intent[:symbol]}"
 
     # Execute based on selected tool
-    if intent[:tool]
-      execute_with_tool(intent[:tool], intent[:params])
-    else
-      # Fallback to action-based routing
-      case intent[:action]
-      when :account_balance
-        get_account_balance
-      when :positions
-        get_positions
-      when :holdings
-        get_holdings
-      when :quote
-        get_quote_details(intent[:symbol])
-      when :historical_data
-        get_historical_data(intent[:symbol], intent[:timeframe], intent[:interval])
-      when :instrument_search
-        search_instrument(intent[:symbol])
-      else
-        general_help
-      end
+    result = if intent[:tool]
+               Rails.logger.info "🔧 Executing tool: #{intent[:tool]}"
+               execute_with_tool(intent[:tool], intent[:params])
+             elsif intent[:action]
+               Rails.logger.info "⚡ Executing action: #{intent[:action]}"
+               # Fallback to action-based routing
+               case intent[:action]
+               when :account_balance
+                 get_account_balance
+               when :positions
+                 get_positions
+               when :holdings
+                 get_holdings
+               when :quote
+                 get_quote_details(intent[:symbol])
+               when :historical_data
+                 get_historical_data(intent[:symbol], intent[:timeframe], intent[:interval])
+               when :instrument_search
+                 search_instrument(intent[:symbol])
+               else
+                 # Try direct quote detection as fallback
+                 if @user_prompt.match?(/\b(quote|price|ltp|last price|current price)\b/) && extract_symbol_from_prompt
+                   Rails.logger.info "🎯 Fallback: Direct quote detection"
+                   get_quote_details
+                 else
+                   general_help
+                 end
+               end
+             else
+               # Try direct quote detection as final fallback
+               Rails.logger.info "🔄 Final fallback: Checking for quote request"
+               if @user_prompt.match?(/\b(quote|price|ltp|last price|current price)\b/) && extract_symbol_from_prompt
+                 symbol = extract_symbol_from_prompt
+                 Rails.logger.info "✅ Detected quote for symbol: #{symbol}"
+                 get_quote_details
+               else
+                 Rails.logger.warn "⚠️ No intent matched, returning help"
+                 general_help
+               end
+             end
+
+    Rails.logger.info "📤 Result type: #{result.class}, has keys: #{result.is_a?(Hash) ? result.keys.inspect : 'N/A'}"
+
+    # Ensure result has required fields
+    if result.nil?
+      Rails.logger.error "❌ Result is nil!"
+      return error_response("Unexpected error: no result returned")
     end
+
+    unless result.is_a?(Hash) && result[:type] && result[:formatted]
+      Rails.logger.error "❌ Result missing required fields! Result: #{result.inspect[0..200]}"
+      return error_response("Result format invalid: missing type or formatted")
+    end
+
+    result
+  rescue StandardError => e
+    Rails.logger.error "❌ DhanTradingAgent.execute failed: #{e.message}\n#{e.backtrace.first(5).join("\n")}"
+    error_response("Execution failed: #{e.message}")
   end
 
   def requires_iteration?
     # Complex tasks that need multi-step execution (find instrument, then fetch data)
+    # NOTE: Simple quote requests should NOT use iteration
     needs_iteration =
-      @user_prompt.include?('historical') ||
-      @user_prompt.include?('ohlc') ||
+      (@user_prompt.include?('historical') && !@user_prompt.match?(/\b(quote|price|ltp)\b/)) ||
+      (@user_prompt.include?('ohlc') && !@user_prompt.match?(/\b(quote|price|ltp)\b/)) ||
       @user_prompt.include?('candle') ||
       @user_prompt.include?('chart') ||
       (@user_prompt.include?('option') && @user_prompt.include?('chain')) ||
-      @user_prompt.match?(/buy|sell|order/) && !@user_prompt.include?('show') ||
+      (@user_prompt.match?(/buy|sell|order/) && !@user_prompt.include?('show')) ||
       @user_prompt.include?('analyze') ||
-      @user_prompt.include?('compare') ||
-      @user_prompt.include?('option')
+      @user_prompt.include?('compare')
 
     Rails.logger.info "🤔 Requires iteration? #{needs_iteration} (prompt: #{@prompt})"
     needs_iteration
@@ -61,30 +102,168 @@ class DhanTradingAgent
   def execute_with_iteration
     # Use IntelligentTradingAgent for complex tasks with full reasoning loop
     agent = IntelligentTradingAgent.new(prompt: @prompt)
-    agent.execute
+    result = agent.execute
+
+    # Ensure IntelligentTradingAgent result has the expected format
+    if result.is_a?(Hash) && result[:type] && result[:formatted]
+      result
+    elsif result.is_a?(Hash)
+      # Convert IntelligentTradingAgent format to expected format
+      # Handle case where data might be an Instrument or other non-Hash object
+      data = result[:data]
+
+      # If data is an Instrument, format it properly
+      if data.is_a?(DhanHQ::Models::Instrument)
+        {
+          type: result[:type] || :success,
+          message: result[:message] || "Found instrument: #{data.symbol_name}",
+          formatted: result[:formatted] || format_instrument_for_display(data),
+          data: {
+            symbol: data.symbol_name,
+            security_id: data.security_id,
+            exchange_segment: data.exchange_segment
+          }
+        }
+      else
+        {
+          type: result[:type] || :success,
+          message: result[:message] || 'Task completed',
+          formatted: result[:formatted] || format_result_for_display(data || result),
+          data: data || result
+        }
+      end
+    elsif result.is_a?(DhanHQ::Models::Instrument)
+      # Direct Instrument result
+      {
+        type: :success,
+        message: "Found instrument: #{result.symbol_name}",
+        formatted: format_instrument_for_display(result),
+        data: {
+          symbol: result.symbol_name,
+          security_id: result.security_id,
+          exchange_segment: result.exchange_segment
+        }
+      }
+    else
+      error_response("Iterative agent returned unexpected result: #{result.class}")
+    end
+  rescue StandardError => e
+    Rails.logger.error "❌ execute_with_iteration failed: #{e.message}\n#{e.backtrace.first(5).join("\n")}"
+    error_response("Iterative execution failed: #{e.message}")
+  end
+
+  def format_result_for_display(result)
+    # Handle Instrument objects
+    if result.is_a?(DhanHQ::Models::Instrument)
+      return format_instrument_for_display(result)
+    end
+
+    # Handle Hash results
+    if result.is_a?(Hash)
+      if result[:error]
+        "❌ #{result[:error]}"
+      elsif result[:data]
+        "<pre class='text-xs overflow-auto'>#{JSON.pretty_generate(result[:data])}</pre>"
+      else
+        "<pre class='text-xs overflow-auto'>#{JSON.pretty_generate(result)}</pre>"
+      end
+    elsif result.is_a?(Array)
+      "<pre class='text-xs overflow-auto'>#{JSON.pretty_generate(result)}</pre>"
+    else
+      result.to_s
+    end
+  end
+
+  def format_instrument_for_display(instrument)
+    <<~HTML
+      <div class="bg-gradient-to-r from-blue-50 to-purple-50 p-4 rounded-lg">
+        <h3 class="font-bold text-lg mb-2">🔍 #{instrument.symbol_name || instrument.underlying_symbol || 'Unknown'}</h3>
+        <p class="text-sm text-gray-600">Security ID: #{instrument.security_id}</p>
+        <p class="text-sm text-gray-600">Exchange: #{instrument.exchange_segment}</p>
+        <p class="text-sm text-gray-600">Instrument Type: #{instrument.instrument || 'N/A'}</p>
+      </div>
+    HTML
   end
 
   def execute_with_tool(tool_name, params = {})
+    # Handle search_instrument specially - if user wants quote, go straight to quote workflow
+    if tool_name.to_s.include?('search_instrument') || tool_name.to_s.include?('instrument')
+      # If this is part of a quote request, use quote workflow instead
+      if @user_prompt.match?(/\b(quote|price|ltp|last price|current price)\b/)
+        Rails.logger.info "🔄 search_instrument detected for quote request, routing to quote workflow"
+        symbol = normalize_symbol(params[:symbol]) || extract_symbol_from_prompt
+        return execute_workflow(:quote_with_analysis, { symbol: symbol }.merge(params.reject { |k| k == :symbol }))
+      else
+        # Actual instrument search
+        symbol = normalize_symbol(params[:symbol]) || extract_symbol_from_prompt
+        return search_instrument(symbol)
+      end
+    end
+
     # Check if this needs a workflow (multi-step)
     if tool_name.to_s.include?('option_chain') || @user_prompt.include?('option')
       result = execute_workflow(:option_chain, params)
     elsif tool_name.to_s.include?('place_order') || @user_prompt.match?(/buy|sell|order/i)
       result = execute_workflow(:place_order_with_risk_check, params)
-    elsif tool_name.to_s.include?('quote') || tool_name.to_s.include?('price')
+    elsif tool_name.to_s.include?('quote') || tool_name.to_s.include?('price') || tool_name.to_s.include?('get_live_quote')
+      # Always use workflow for quote to ensure symbol is resolved first
       result = execute_workflow(:quote_with_analysis, params)
+    elsif tool_name.to_s.include?('historical') || tool_name.to_s.include?('intraday') || tool_name.to_s.include?('daily') || tool_name.to_s.include?('ohlc') || tool_name.to_s.include?('candle')
+      # Historical data needs symbol lookup first, so use get_historical_data method
+      symbol = normalize_symbol(params[:symbol]) || extract_symbol_from_prompt
+      result = get_historical_data(symbol, params[:timeframe], params[:interval])
     else
-      # Simple tool execution
-      result = DhanAgentToolMapper.execute_tool(tool_name, **params)
-      {
-        type: :success,
-        message: "Executed #{tool_name}",
-        data: result,
-        formatted: format_tool_result(tool_name, result)
-      }
+      # Simple tool execution - only for tools that don't need params or have all required params
+      begin
+        raw_result = DhanAgentToolMapper.execute_tool(tool_name, **params)
+
+        # Check if result is an error hash
+        if raw_result.is_a?(Hash) && raw_result[:error]
+          Rails.logger.warn "Tool returned error: #{raw_result[:error]}"
+
+          # If it's a quote-related tool that failed, try workflow instead
+          if tool_name.to_s.include?('quote') || @user_prompt.match?(/\b(quote|price|ltp)\b/)
+            Rails.logger.info "🔄 Retrying with quote workflow"
+            symbol = normalize_symbol(params[:symbol]) || extract_symbol_from_prompt
+            return execute_workflow(:quote_with_analysis, { symbol: symbol }.merge(params.reject { |k| k == :symbol }))
+          end
+
+          return {
+            type: :error,
+            message: raw_result[:error],
+            formatted: "❌ Error: #{raw_result[:error]}"
+          }
+        end
+
+        {
+          type: :success,
+          message: "Executed #{tool_name}",
+          data: raw_result,
+          formatted: format_tool_result(tool_name, raw_result)
+        }
+      rescue ArgumentError => e
+        # If tool execution fails due to missing params, try workflow or fallback
+        Rails.logger.warn "Tool execution failed: #{e.message}, trying workflow instead"
+
+        if tool_name.to_s.include?('quote') || @user_prompt.match?(/\b(quote|price|ltp)\b/)
+          symbol = normalize_symbol(params[:symbol]) || extract_symbol_from_prompt
+          execute_workflow(:quote_with_analysis, { symbol: symbol }.merge(params.reject { |k| k == :symbol }))
+        elsif tool_name.to_s.include?('historical') || tool_name.to_s.include?('intraday') || tool_name.to_s.include?('daily') || tool_name.to_s.include?('ohlc') || tool_name.to_s.include?('candle')
+          symbol = normalize_symbol(params[:symbol]) || extract_symbol_from_prompt
+          get_historical_data(symbol, params[:timeframe], params[:interval])
+        else
+          {
+            type: :error,
+            message: "Tool execution failed: #{e.message}",
+            formatted: "❌ Error: #{e.message}. Try: 'Get quote for [SYMBOL]' or 'Get historical data for [SYMBOL]'"
+          }
+        end
+      end
     end
 
     result
   rescue StandardError => e
+    Rails.logger.error "❌ execute_with_tool failed: #{e.message}\n#{e.backtrace.first(5).join("\n")}"
     {
       type: :error,
       message: "Tool execution failed: #{e.message}",
@@ -101,7 +280,7 @@ class DhanTradingAgent
     when :quote_with_analysis
       execute_quote_workflow(params)
     else
-      { type: :error, message: "Unknown workflow" }
+      { type: :error, message: 'Unknown workflow' }
     end
   end
 
@@ -140,46 +319,80 @@ class DhanTradingAgent
     # This is a dangerous operation - add confirmation
     {
       type: :warning,
-      message: "🔴 DANGER: Order execution disabled",
-      formatted: "⚠️ Order placement is DISABLED. This would execute a real trade. Use paper trading mode first."
+      message: '🔴 DANGER: Order execution disabled',
+      formatted: '⚠️ Order placement is DISABLED. This would execute a real trade. Use paper trading mode first.'
     }
   end
 
+  # Normalize symbol parameter to ensure it's a string
+  def normalize_symbol(symbol)
+    return nil if symbol.nil?
+    return symbol.to_s.upcase if symbol.is_a?(String)
+    return symbol[:symbol].to_s.upcase if symbol.is_a?(Hash) && symbol[:symbol]
+    return symbol['symbol'].to_s.upcase if symbol.is_a?(Hash) && symbol['symbol']
+    symbol.to_s.upcase
+  rescue StandardError
+    nil
+  end
+
   def execute_quote_workflow(params)
-    symbol = params[:symbol] || extract_symbol_from_prompt
+    symbol = normalize_symbol(params[:symbol]) || extract_symbol_from_prompt
 
     instrument = DhanHQ::Models::Instrument.find_anywhere(symbol, exact_match: true)
     return error_response("Symbol #{symbol} not found") unless instrument
 
-    # Get quote
-    quote_response = DhanHQ::Models::MarketFeed.quote(
-      instrument.exchange_segment => [instrument.security_id.to_i]
-    )
-    quote_data = quote_response.dig('data', instrument.exchange_segment, instrument.security_id)
+    unless instrument.exchange_segment && instrument.security_id
+      return error_response("Instrument #{symbol} missing required fields")
+    end
 
-    # Get historical for context
-    historical = DhanHQ::Models::HistoricalData.intraday(
-      security_id: instrument.security_id,
-      exchange_segment: instrument.exchange_segment,
-      instrument: instrument.instrument,
-      interval: '15',
-      from_date: 7.days.ago.strftime('%Y-%m-%d'),
-      to_date: Date.today.strftime('%Y-%m-%d')
-    )
+    # Get quote with proper hash construction
+    exchange_segment = instrument.exchange_segment.to_s
+    security_id = instrument.security_id.to_i
+    quote_params = { exchange_segment => [security_id] }
+
+    quote_response = DhanHQ::Models::MarketFeed.quote(quote_params)
+
+    # Try multiple key formats for quote_data lookup
+    quote_data = quote_response.dig('data', exchange_segment, security_id.to_s) ||
+                 quote_response.dig('data', exchange_segment, security_id) ||
+                 quote_response.dig('data', exchange_segment.to_sym, security_id.to_s) ||
+                 quote_response.dig('data', exchange_segment.to_sym, security_id)
+
+    unless quote_data
+      return error_response("No quote data returned for #{symbol}. Response: #{quote_response.inspect[0..200]}")
+    end
+
+    # Get historical for context (optional, don't fail if it errors)
+    historical = begin
+      DhanHQ::Models::HistoricalData.intraday(
+        security_id: instrument.security_id,
+        exchange_segment: instrument.exchange_segment,
+        instrument: instrument.instrument || 'EQUITY',
+        interval: '15',
+        from_date: 7.days.ago.strftime('%Y-%m-%d'),
+        to_date: Date.today.strftime('%Y-%m-%d')
+      )
+    rescue StandardError => e
+      Rails.logger.warn "Historical data fetch failed: #{e.message}"
+      nil
+    end
 
     {
       type: :success,
-      message: "📈 Quote + Analysis for #{symbol}",
+      message: "📈 Quote for #{instrument.symbol_name || symbol}",
       data: {
         quote: quote_data,
         historical: historical
       },
       formatted: format_quote_with_analysis(instrument, quote_data, historical)
     }
+  rescue StandardError => e
+    Rails.logger.error "Quote workflow error: #{e.message}\n#{e.backtrace.first(5).join("\n")}"
+    error_response("Failed to fetch quote: #{e.message}")
   end
 
   def format_option_chain(chain_data)
-    return "No option chain data available" unless chain_data
+    return 'No option chain data available' unless chain_data
 
     # Format option chain display
     calls = chain_data[:data]&.dig(:calls) || []
@@ -189,25 +402,65 @@ class DhanTradingAgent
     html += "<h3 class='font-bold text-lg mb-3'>📊 Option Chain</h3>"
     html += "<p class='text-sm text-gray-600'>Calls: #{calls.length}, Puts: #{puts.length}</p>"
     html += "<pre class='text-xs mt-2 overflow-auto max-h-64'>#{JSON.pretty_generate(chain_data)}</pre>"
-    html += "</div>"
+    html += '</div>'
     html
   end
 
   def format_quote_with_analysis(instrument, quote_data, historical_data)
-    last_price = quote_data&.dig('last_price') || 0
+    # Handle both string and symbol keys
+    last_price = quote_data&.dig('last_price') || quote_data&.dig(:last_price) || 0
+    volume = quote_data&.dig('volume') || quote_data&.dig(:volume) || 0
 
-    html = <<~HTML
+    # Extract OHLC from nested structure (quote_data['ohlc'] or quote_data[:ohlc])
+    ohlc = quote_data&.dig('ohlc') || quote_data&.dig(:ohlc) || {}
+    open_price = ohlc['open'] || ohlc[:open] if ohlc
+    high_price = ohlc['high'] || ohlc[:high] if ohlc
+    low_price = ohlc['low'] || ohlc[:low] if ohlc
+    close_price = ohlc['close'] || ohlc[:close] if ohlc
+
+    # Also check for direct keys (fallback)
+    high_price ||= quote_data&.dig('high') || quote_data&.dig(:high)
+    low_price ||= quote_data&.dig('low') || quote_data&.dig(:low)
+    open_price ||= quote_data&.dig('open') || quote_data&.dig(:open)
+    close_price ||= quote_data&.dig('close') || quote_data&.dig(:close)
+
+    # Format volume with commas
+    volume_formatted = volume.to_i.zero? ? 'N/A' : volume.to_i.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\1,').reverse
+
+    historical_count = historical_data&.dig(:close)&.length || historical_data&.dig('close')&.length || 0
+
+    # Calculate price change if possible
+    net_change = quote_data&.dig('net_change') || quote_data&.dig(:net_change) || 0
+    change_display = net_change.to_f != 0 ? " <span class='text-sm #{net_change > 0 ? 'text-green-600' : 'text-red-600'}'>#{net_change > 0 ? '+' : ''}#{net_change.to_f.round(2)}</span>" : ''
+
+    # Get 52-week high/low
+    high_52w = quote_data&.dig('52_week_high') || quote_data&.dig(:'52_week_high') || quote_data&.dig('fifty_two_week_high') || quote_data&.dig(:fifty_two_week_high) || 0
+    low_52w = quote_data&.dig('52_week_low') || quote_data&.dig(:'52_week_low') || quote_data&.dig('fifty_two_week_low') || quote_data&.dig(:fifty_two_week_low) || 0
+
+    <<~HTML
       <div class="bg-gradient-to-r from-purple-50 to-blue-50 p-4 rounded-lg">
-        <h3 class="font-bold text-lg mb-3">📈 #{instrument.symbol_name}</h3>
+        <h3 class="font-bold text-lg mb-3">📈 #{instrument.symbol_name || instrument.underlying_symbol || 'Unknown'}</h3>
         <div class="text-center mb-4">
-          <div class="text-xs text-gray-600 mb-1">Last Price</div>
-          <div class="text-4xl font-bold">₹#{last_price.to_f.round(2)}</div>
+          <div class="text-xs text-gray-600 mb-1">Last Traded Price</div>
+          <div class="text-4xl font-bold">₹#{last_price.to_f.round(2)}#{change_display}</div>
         </div>
-        <p class="text-sm text-gray-600 mb-2">Volume: #{quote_data&.dig('volume')&.to_i&.to_s&.reverse&.gsub(/(\\d{3})(?=\\d)/, '\\1,')&.reverse || 'N/A'}</p>
-        <p class="text-xs text-gray-500">Historical data: #{historical_data&.dig(:close)&.length || 0} candles</p>
+
+        #{if open_price || high_price || low_price || close_price
+            '<div class="grid grid-cols-2 gap-3 text-sm mb-3">' +
+              (open_price ? "<div><div class='text-xs text-gray-500'>Open</div><div class='font-semibold'>₹#{open_price.to_f.round(2)}</div></div>" : '') +
+              (high_price ? "<div><div class='text-xs text-gray-500'>High</div><div class='font-semibold text-green-600'>₹#{high_price.to_f.round(2)}</div></div>" : '') +
+              (low_price ? "<div><div class='text-xs text-gray-500'>Low</div><div class='font-semibold text-red-600'>₹#{low_price.to_f.round(2)}</div></div>" : '') +
+              (close_price ? "<div><div class='text-xs text-gray-500'>Close</div><div class='font-semibold'>₹#{close_price.to_f.round(2)}</div></div>" : '') +
+            '</div>'
+          else
+            ''
+          end}
+
+        <p class="text-sm text-gray-600 mb-2">📊 Volume: #{volume_formatted}</p>
+        #{high_52w > 0 || low_52w > 0 ? "<p class='text-xs text-gray-500 mb-2'>52W High: ₹#{high_52w.to_f.round(2)} | 52W Low: ₹#{low_52w.to_f.round(2)}</p>" : ''}
+        #{historical_count > 0 ? "<p class='text-xs text-gray-500'>📈 Historical: #{historical_count} candles available</p>" : ''}
       </div>
     HTML
-    html
   end
 
   def format_tool_result(tool_name, result)
@@ -233,12 +486,13 @@ class DhanTradingAgent
   end
 
   def format_ohlc_result(result)
-    return "No OHLC data available" unless result
+    return 'No OHLC data available' unless result
+
     "<pre class='text-xs overflow-auto max-h-64'>#{JSON.pretty_generate(result)}</pre>"
   end
 
   def format_historical_tool_result(result)
-    return "No historical data available" unless result
+    return 'No historical data available' unless result
 
     closes = result[:close] || result['close'] || []
     if closes.is_a?(Array) && closes.length > 0
@@ -250,7 +504,8 @@ class DhanTradingAgent
   end
 
   def format_quote_tool_result(result)
-    return "No data available" unless result
+    return 'No data available' unless result
+
     "<pre>#{JSON.pretty_generate(result)}</pre>"
   end
 
@@ -278,7 +533,7 @@ class DhanTradingAgent
 
     # Call Ollama to select tool
     ai_response = OllamaClient.new.chat(
-      model: "qwen2.5:1.5b-instruct",
+      model: 'qwen2.5:1.5b-instruct',
       prompt: context
     )
 
@@ -348,6 +603,7 @@ class DhanTradingAgent
     return :quote if @user_prompt.match?(/\b(quote|price|ltp|last price|current price)/)
     return :historical_data if @user_prompt.match?(/\b(historical|ohlc|candle|chart)\b/)
     return :instrument_search if @user_prompt.match?(/\b(find|search|lookup)\b/)
+
     :unknown
   end
 
@@ -355,7 +611,7 @@ class DhanTradingAgent
     fund = DhanHQ::Models::Funds.fetch
     {
       type: :account,
-      message: "💰 Your Account Balance",
+      message: '💰 Your Account Balance',
       data: {
         available: fund.available_balance,
         utilized: fund.utilized_amount,
@@ -364,52 +620,72 @@ class DhanTradingAgent
       },
       formatted: format_account(fund)
     }
+  rescue StandardError => e
+    Rails.logger.error "❌ get_account_balance failed: #{e.message}"
+    error_response("Failed to fetch account balance: #{e.message}")
   end
 
   def get_positions
     positions = DhanHQ::Models::Position.all
     {
       type: :positions,
-      message: "📊 Your Open Positions",
+      message: '📊 Your Open Positions',
       data: positions.map { |p| position_to_hash(p) },
       formatted: format_positions(positions)
     }
+  rescue StandardError => e
+    Rails.logger.error "❌ get_positions failed: #{e.message}"
+    error_response("Failed to fetch positions: #{e.message}")
   end
 
   def get_holdings
     holdings = DhanHQ::Models::Holding.all
     {
       type: :holdings,
-      message: "💼 Your Holdings",
+      message: '💼 Your Holdings',
       data: holdings.map { |h| holding_to_hash(h) },
       formatted: format_holdings(holdings)
     }
+  rescue StandardError => e
+    Rails.logger.error "❌ get_holdings failed: #{e.message}"
+    error_response("Failed to fetch holdings: #{e.message}")
   end
 
   def get_quote_details(symbol = nil)
-    symbol ||= extract_symbol_from_prompt
-    return error_response("Please specify a symbol") unless symbol
+    symbol = normalize_symbol(symbol) || extract_symbol_from_prompt
+    return error_response('Please specify a symbol') unless symbol
 
     inst = DhanHQ::Models::Instrument.find_anywhere(symbol, exact_match: true)
     return error_response("Symbol #{symbol} not found") unless inst
 
+    unless inst.exchange_segment && inst.security_id
+      return error_response("Instrument #{symbol} missing required fields (exchange_segment or security_id)")
+    end
+
     quote_data = get_live_quote(inst)
+
     {
       type: :quote,
       message: "📈 Quote for #{symbol}",
       data: quote_data,
       formatted: format_quote(inst, quote_data)
     }
+  rescue StandardError => e
+    error_response("Failed to get quote: #{e.message}")
   end
 
   def get_historical_data(symbol = nil, timeframe = nil, interval = nil)
     symbol ||= extract_symbol_from_prompt
-    return error_response("Please specify a symbol") unless symbol
+    return error_response('Please specify a symbol') unless symbol
 
     inst = DhanHQ::Models::Instrument.find_anywhere(symbol, exact_match: true)
     return error_response("Symbol #{symbol} not found") unless inst
 
-    timeframe ||= @user_prompt.include?("daily") ? "daily" : "intraday"
+    unless inst.exchange_segment && inst.security_id && inst.instrument
+      return error_response("Instrument #{symbol} missing required fields")
+    end
+
+    timeframe ||= @user_prompt.include?('daily') ? 'daily' : 'intraday'
     interval ||= extract_interval
 
     data = fetch_historical(inst, timeframe, interval)
@@ -419,27 +695,33 @@ class DhanTradingAgent
       data: data,
       formatted: format_historical(inst, data, timeframe)
     }
+  rescue StandardError => e
+    Rails.logger.error "❌ get_historical_data failed: #{e.message}"
+    error_response("Failed to fetch historical data: #{e.message}")
   end
 
   def search_instrument(symbol = nil)
     symbol ||= extract_symbol_from_prompt
-    return error_response("Please specify a symbol to search") unless symbol
+    return error_response('Please specify a symbol to search') unless symbol
 
     inst = DhanHQ::Models::Instrument.find_anywhere(symbol, exact_match: false)
     return error_response("No instrument found for #{symbol}") unless inst
 
     {
       type: :search,
-      message: "🔍 Instrument Details",
+      message: '🔍 Instrument Details',
       data: instrument_to_hash(inst),
       formatted: format_instrument(inst)
     }
+  rescue StandardError => e
+    Rails.logger.error "❌ search_instrument failed: #{e.message}"
+    error_response("Failed to search instrument: #{e.message}")
   end
 
   def general_help
     {
       type: :help,
-      message: "🤖 Trading Assistant Commands",
+      message: '🤖 Trading Assistant Commands',
       formatted: help_text
     }
   end
@@ -448,27 +730,50 @@ class DhanTradingAgent
 
   def extract_symbol_from_prompt
     match = @user_prompt.match(/\b(reliance|tcs|infy|wipro|hdfc|sbi|axis|icici|bajaj|lt|hero|maruti|titangar|britannia|titan|dmart|adanient|ultracemco|hindunilever|asianpaint|nifty|banknifty|sensex)\b/i)
-    match ? match[1].upcase : (@user_prompt.match(/\b([A-Z]{3,})\b/)&.[](1))
+    if match && match[1].is_a?(String)
+      match[1].upcase
+    else
+      uppercase_match = @user_prompt.match(/\b([A-Z]{3,})\b/)
+      uppercase_match ? uppercase_match[1] : nil
+    end
   end
 
   def extract_interval
     match = @user_prompt.match(/(\d+)\s*min/i)
-    match ? match[1] : "15"
+    match ? match[1] : '15'
   end
 
   def get_live_quote(instrument)
-    quote_response = DhanHQ::Models::MarketFeed.quote(
-      instrument.exchange_segment => [instrument.security_id.to_i]
-    )
+    # Validate instrument has required fields
+    unless instrument && instrument.exchange_segment && instrument.security_id
+      raise StandardError, 'Invalid instrument: missing exchange_segment or security_id'
+    end
 
-    quote_data = quote_response.dig('data', instrument.exchange_segment, instrument.security_id)
+    exchange_segment = instrument.exchange_segment.to_s
+    security_id = instrument.security_id.to_i
+
+    # Create proper hash for quote call
+    quote_params = { exchange_segment => [security_id] }
+
+    quote_response = DhanHQ::Models::MarketFeed.quote(quote_params)
+
+    # Try multiple key formats for quote_data lookup
+    quote_data = quote_response.dig('data', exchange_segment, security_id.to_s) ||
+                 quote_response.dig('data', exchange_segment, security_id) ||
+                 quote_response.dig('data', exchange_segment)
+
+    raise StandardError, "No quote data returned for #{instrument.symbol_name}" unless quote_data
+
     {
-      last_price: quote_data&.dig('last_price'),
-      volume: quote_data&.dig('volume'),
-      ohlc: quote_data&.dig('ohlc'),
-      high_52w: quote_data&.dig('52_week_high'),
-      low_52w: quote_data&.dig('52_week_low')
+      last_price: quote_data['last_price'] || quote_data[:last_price],
+      volume: quote_data['volume'] || quote_data[:volume],
+      ohlc: quote_data['ohlc'] || quote_data[:ohlc] || {},
+      high_52w: quote_data['52_week_high'] || quote_data[:fifty_two_week_high] || quote_data[:high_52w],
+      low_52w: quote_data['52_week_low'] || quote_data[:fifty_two_week_low] || quote_data[:low_52w]
     }
+  rescue StandardError => e
+    Rails.logger.error "❌ get_live_quote failed: #{e.message}"
+    raise
   end
 
   def fetch_historical(instrument, timeframe, interval)
@@ -479,11 +784,13 @@ class DhanTradingAgent
       from_date: 7.days.ago.strftime('%Y-%m-%d'),
       to_date: Date.today.strftime('%Y-%m-%d')
     }
-    params[:interval] = interval if timeframe == "intraday"
+    params[:interval] = interval if timeframe == 'intraday'
 
-    timeframe == "daily" ?
-      DhanHQ::Models::HistoricalData.daily(params) :
+    if timeframe == 'daily'
+      DhanHQ::Models::HistoricalData.daily(params)
+    else
       DhanHQ::Models::HistoricalData.intraday(params)
+    end
   end
 
   def position_to_hash(pos)
@@ -520,27 +827,27 @@ class DhanTradingAgent
 
   def format_account(fund)
     <<~HTML
-      💰 <strong>Available Balance:</strong> ₹#{fund.available_balance.to_f.round(2).to_s}
-      <br>📊 <strong>Utilized:</strong> ₹#{fund.utilized_amount.to_f.round(2).to_s}
-      <br>💵 <strong>Withdrawable:</strong> ₹#{fund.withdrawable_balance.to_f.round(2).to_s}
+      💰 <strong>Available Balance:</strong> ₹#{fund.available_balance.to_f.round(2)}
+      <br>📊 <strong>Utilized:</strong> ₹#{fund.utilized_amount.to_f.round(2)}
+      <br>💵 <strong>Withdrawable:</strong> ₹#{fund.withdrawable_balance.to_f.round(2)}
     HTML
   end
 
   def format_positions(positions)
-    return "<p>No open positions</p>" if positions.empty?
+    return '<p>No open positions</p>' if positions.empty?
 
     html = "<table class='w-full text-sm'><thead><tr><th>Symbol</th><th>Qty</th><th>Value</th><th>P&L</th></tr></thead><tbody>"
     positions.each do |pos|
-      pnl_color = pos.unrealized_profit >= 0 ? "text-green-600" : "text-red-600"
+      pnl_color = pos.unrealized_profit >= 0 ? 'text-green-600' : 'text-red-600'
       html += "<tr><td>#{pos.trading_symbol}</td><td>#{pos.net_qty}</td>"
       html += "<td>₹#{pos.cost_price.to_f.round(2)}</td>"
       html += "<td class='#{pnl_color}'>₹#{pos.unrealized_profit.to_f.round(2)}</td></tr>"
     end
-    html += "</tbody></table>"
+    html += '</tbody></table>'
   end
 
   def format_holdings(holdings)
-    return "<p>No holdings</p>" if holdings.empty?
+    return '<p>No holdings</p>' if holdings.empty?
 
     html = "<table class='w-full text-sm'><thead><tr><th>Symbol</th><th>Qty</th><th>Invested</th><th>Current</th></tr></thead><tbody>"
     holdings.each do |hold|
@@ -548,23 +855,40 @@ class DhanTradingAgent
       html += "<td>₹#{hold.average_price.to_f.round(2)}</td>"
       html += "<td>₹#{hold.current_price.to_f.round(2)}</td></tr>"
     end
-    html += "</tbody></table>"
+    html += '</tbody></table>'
   end
 
   def format_quote(instrument, quote_data)
+    # Handle both symbol and string keys
+    last_price = quote_data[:last_price] || quote_data['last_price'] || 0
+    volume = quote_data[:volume] || quote_data['volume'] || 0
+    high_52w = quote_data[:high_52w] || quote_data['high_52w'] || quote_data[:'52_week_high'] || quote_data['52_week_high'] || 0
+    low_52w = quote_data[:low_52w] || quote_data['low_52w'] || quote_data[:'52_week_low'] || quote_data['52_week_low'] || 0
+
+    volume_formatted = volume.to_i.zero? ? 'N/A' : volume.to_i.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\1,').reverse
+
     <<~HTML
-      📈 <strong>#{instrument.symbol_name}</strong>
-      <br>💰 <strong>Last Price:</strong> ₹#{quote_data[:last_price].to_f.round(2)}
-      <br>📊 <strong>Volume:</strong> #{quote_data[:volume].to_i.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse}
-      <br>📈 <strong>52W High:</strong> ₹#{quote_data[:high_52w].to_f.round(2)} | <strong>52W Low:</strong> ₹#{quote_data[:low_52w].to_f.round(2)}
+      <div class="bg-gradient-to-r from-purple-50 to-blue-50 p-4 rounded-lg">
+        <h3 class="font-bold text-lg mb-3">📈 #{instrument.symbol_name || instrument.underlying_symbol || 'Unknown'}</h3>
+        <div class="text-center mb-4">
+          <div class="text-xs text-gray-600 mb-1">Last Traded Price</div>
+          <div class="text-4xl font-bold">₹#{last_price.to_f.round(2)}</div>
+        </div>
+        <p class="text-sm text-gray-600 mb-2">📊 Volume: #{volume_formatted}</p>
+        #{high_52w > 0 || low_52w > 0 ? "<p class='text-xs text-gray-500'>52W High: ₹#{high_52w.to_f.round(2)} | 52W Low: ₹#{low_52w.to_f.round(2)}</p>" : ''}
+      </div>
     HTML
   end
 
   def format_historical(instrument, data, timeframe)
-    return "<p>No historical data available</p>" unless data && data[:close] && data[:close].length > 0
+    return '<p>No historical data available</p>' unless data && data[:close] && data[:close].length > 0
 
     closes = data[:close] || []
-    last_price = closes.last.to_f.round(2) rescue 0
+    last_price = begin
+      closes.last.to_f.round(2)
+    rescue StandardError
+      0
+    end
 
     "#{instrument.symbol_name} - Last 7 days #{timeframe} data. Last close: ₹#{last_price} (#{closes.length} candles)"
   end
@@ -596,4 +920,3 @@ class DhanTradingAgent
     }
   end
 end
-

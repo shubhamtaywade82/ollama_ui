@@ -54,15 +54,22 @@ class IntelligentTradingAgent
   def reason_step
     Rails.logger.info "REASONING: Understanding request..."
 
+    tools_list = DhanAgentToolMapper.tools_for_llm.map { |t| "#{t[:name]} (#{t[:description]})" }.join(", ")
+
     reasoning_prompt = <<~PROMPT
       User request: "#{@prompt}"
 
-      Available tools: #{DhanAgentToolMapper.tools_for_llm.map { |t| "#{t[:name]} (#{t[:description]})" }.join(", ")}
+      Available tools: #{tools_list}
+
+      IMPORTANT: Tool selection guidance:
+      - "candles", "ohlc", "chart", "historical data" → Use get_historical_intraday or get_historical_daily (NOT get_last_price or get_live_quote)
+      - "quote", "price", "ltp", "last price" → Use get_live_quote or get_last_price
+      - "candles for X" means historical OHLCV data for X, use get_historical_intraday or get_ohlc
 
       Analyze this request and return JSON:
       {
         "goal": "what the user wants to achieve",
-        "required_tools": ["list of tool names needed"],
+        "required_tools": ["list of tool names needed. Use get_historical_intraday or get_ohlc for candles/ohlc requests"],
         "parameters_needed": {
           "symbol": "extract from prompt or state 'needs_lookup'",
           "dates": "calculate or state 'needs_calculation'",
@@ -112,7 +119,13 @@ class IntelligentTradingAgent
     # Add search_instrument as FIRST step if needed (before any other steps)
     if needs_instrument && !required_tools.any? { |t| t.to_s.include?('instrument') }
       Rails.logger.info "🔍 Adding search_instrument as first step (required for data tools)"
-      symbol = extract_symbol
+      # Use symbol from reasoning if available, otherwise extract
+      symbol = if @reasoning && @reasoning[:parameters_needed] && @reasoning[:parameters_needed][:symbol]
+                 @reasoning[:parameters_needed][:symbol].to_s.upcase
+               else
+                 extract_symbol_fresh
+               end
+
       if symbol
         @plan.insert(0, {
           id: 0,
@@ -247,7 +260,12 @@ class IntelligentTradingAgent
     step[:params_needed].each do |param|
       case param.to_s
       when /symbol/
-        params[:symbol] = extract_symbol
+        # Use symbol from reasoning if available, otherwise extract
+        if @reasoning && @reasoning[:parameters_needed] && @reasoning[:parameters_needed][:symbol]
+          params[:symbol] = @reasoning[:parameters_needed][:symbol].to_s.upcase
+        else
+          params[:symbol] = extract_symbol_fresh
+        end
         # If not found, we might need to look it up
         if params[:symbol].nil?
           params[:symbol_needs_lookup] = true
@@ -322,7 +340,8 @@ class IntelligentTradingAgent
     # If we have an instrument in context, enrich params with instrument details
     if @context[:instrument]
       inst = @context[:instrument]
-      resolved[:security_id] = inst.security_id.to_i
+      # DhanHQ API requires security_id as a STRING, not integer
+      resolved[:security_id] = inst.security_id.to_s
       resolved[:exchange_segment] = inst.exchange_segment.to_s
       resolved[:instrument] = inst.instrument.to_s
 
@@ -347,7 +366,7 @@ class IntelligentTradingAgent
 
     case tool_name.to_s
     when /search_instrument|get_instruments_by_segment|find_instrument/
-      symbol = params[:symbol] || extract_symbol
+      symbol = params[:symbol] || extract_symbol_fresh
       Rails.logger.info "🔍 Finding instrument: #{symbol}"
       instrument = find_instrument(symbol)
 
@@ -359,11 +378,11 @@ class IntelligentTradingAgent
       end
       instrument
 
-    when /get_live_quote|get_quote|quote/
+    when /get_live_quote|get_quote|quote|get_last_price|last_price|ltp/
       return { error: "No instrument found. Need to search for symbol first." } unless @context[:instrument]
       get_quote_for_instrument(params)
 
-    when /get_historical_intraday|historical_intraday|intraday/
+    when /get_historical_intraday|historical_intraday|intraday|candles|get_candles/
       unless @context[:instrument]
         Rails.logger.error "❌ No instrument in context for historical data"
         return { error: "No instrument found. Need to search for symbol first." }
@@ -379,7 +398,7 @@ class IntelligentTradingAgent
       params[:timeframe] = 'daily'
       get_historical_for_instrument(params)
 
-    when /get_ohlc|ohlc/
+    when /get_ohlc|ohlc|candles|get_candles/
       return { error: "No instrument found. Need to search for symbol first." } unless @context[:instrument]
       get_ohlc_for_instrument(params)
 
@@ -569,12 +588,13 @@ class IntelligentTradingAgent
     return nil unless symbol
 
     Rails.logger.info "🔎 Searching for instrument: #{symbol}"
+    symbol_up = symbol.upcase.strip
 
     # For indices like NIFTY, try to find in IDX_I segment first
-    if symbol.match?(/NIFTY|SENSEX|BANKNIFTY|FINNIFTY|MIDCPNIFTY/i)
-      Rails.logger.info "📌 Searching for index #{symbol} in IDX_I segment"
+    if symbol_up.match?(/NIFTY|SENSEX|BANKNIFTY|FINNIFTY|MIDCPNIFTY/i)
+      Rails.logger.info "📌 Searching for index #{symbol_up} in IDX_I segment"
       begin
-        result = DhanHQ::Models::Instrument.find("IDX_I", symbol.upcase)
+        result = DhanHQ::Models::Instrument.find("IDX_I", symbol_up)
         if result
           Rails.logger.info "✅ Found index: #{result.symbol_name} (#{result.security_id})"
           return result
@@ -584,10 +604,53 @@ class IntelligentTradingAgent
       end
     end
 
-    # General search
-    result = DhanHQ::Models::Instrument.find_anywhere(symbol.upcase, exact_match: false)
+    # Try exact match first (preferred)
+    begin
+      result = DhanHQ::Models::Instrument.find_anywhere(symbol_up, exact_match: true)
+      if result
+        Rails.logger.info "✅ Found exact match: #{result.symbol_name} (#{result.security_id}) in #{result.exchange_segment}"
+        return result
+      end
+    rescue StandardError => e
+      Rails.logger.info "Exact match failed, trying fuzzy search"
+    end
+
+    # If exact match fails, try fuzzy search
+    # But prefer results where symbol name matches exactly (ignoring spaces/formatting)
+    result = DhanHQ::Models::Instrument.find_anywhere(symbol_up, exact_match: false)
 
     if result
+      # If we get a result but it doesn't match well (e.g., "HDFC" -> "HDFCAMC"), try to find better matches
+      result_symbol = result.symbol_name.to_s.upcase.gsub(/\s+/, '')
+      query_symbol = symbol_up.gsub(/\s+/, '')
+
+      # If result symbol contains query but is much longer (e.g., HDFCAMC contains HDFC but HDFC is better)
+      if result_symbol != query_symbol && result_symbol.length > query_symbol.length + 2
+        Rails.logger.info "⚠️ Fuzzy match returned #{result.symbol_name}, but searching for better match..."
+        # Try to find exact symbol match in common segments
+        ['NSE_EQ', 'NSE_FNO'].each do |segment|
+          begin
+            candidates = DhanHQ::Models::Instrument.search(segment, symbol_up)
+            if candidates && candidates.any?
+              # Prefer results where symbol exactly matches query
+              exact_candidate = candidates.find { |c| c.symbol_name.to_s.upcase.gsub(/\s+/, '') == query_symbol }
+              if exact_candidate
+                Rails.logger.info "✅ Found better match: #{exact_candidate.symbol_name} (#{exact_candidate.security_id})"
+                return exact_candidate
+              end
+              # Otherwise prefer shorter symbol names (less likely to be ETFs/funds)
+              best = candidates.min_by { |c| c.symbol_name.to_s.length }
+              if best && best.symbol_name.to_s.length < result.symbol_name.to_s.length
+                Rails.logger.info "✅ Found shorter match: #{best.symbol_name} (#{best.security_id})"
+                return best
+              end
+            end
+          rescue StandardError => e
+            Rails.logger.debug "Search in #{segment} failed: #{e.message}"
+          end
+        end
+      end
+
       Rails.logger.info "✅ Found: #{result.symbol_name} (#{result.security_id}) in #{result.exchange_segment}"
     else
       Rails.logger.warn "❌ No instrument found for: #{symbol}"
@@ -603,17 +666,11 @@ class IntelligentTradingAgent
     return { error: "No instrument in context" } unless @context[:instrument]
 
     inst = @context[:instrument]
-    # Ensure exchange_segment is a string
-    exchange_segment = inst.exchange_segment.to_s
-    security_id = inst.security_id.to_i
 
     Rails.logger.info "📊 Getting quote for instrument: #{inst.symbol_name}"
 
-    quote_response = DhanHQ::Models::MarketFeed.quote(
-      exchange_segment => [security_id]
-    )
-
-    quote_response.dig('data', exchange_segment, security_id.to_s)
+    # Use convenience method that automatically uses instrument's attributes
+    inst.quote
   end
 
   def get_historical_for_instrument(params = {})
@@ -622,31 +679,26 @@ class IntelligentTradingAgent
     inst = @context[:instrument]
     timeframe = (params[:timeframe] || 'intraday').to_s
 
-    # Ensure all params are strings
-    params_for_api = {
-      security_id: inst.security_id.to_i,
-      exchange_segment: inst.exchange_segment.to_s,
-      instrument: inst.instrument.to_s,
-      from_date: (params[:from_date] || 7.days.ago.strftime('%Y-%m-%d')).to_s,
-      to_date: (params[:to_date] || Date.today.strftime('%Y-%m-%d')).to_s
-    }
+    from_date = (params[:from_date] || 7.days.ago.strftime('%Y-%m-%d')).to_s
+    to_date = (params[:to_date] || Date.today.strftime('%Y-%m-%d')).to_s
 
-    # Add interval for intraday (must be a string)
-    params_for_api[:interval] = (params[:interval] || '15').to_s if timeframe == 'intraday'
+    Rails.logger.info "📊 Fetching #{timeframe} data for #{inst.symbol_name} (#{from_date} to #{to_date})"
 
-    # Add expiry_code for F&O (integer)
-    params_for_api[:expiry_code] = 0 if inst.instrument.to_s == 'FUTURES'
-
-    Rails.logger.info "📊 Fetching #{timeframe} data with params: #{params_for_api.inspect}"
-
-    # Call the correct method directly instead of using .send
+    # Use convenience methods that automatically use instrument's attributes
     result = if timeframe == 'daily'
-               DhanHQ::Models::HistoricalData.daily(params_for_api)
+               # Add expiry_code for F&O if needed
+               options = {}
+               options[:expiry_code] = 0 if inst.instrument.to_s == 'FUTURES'
+               inst.daily(from_date: from_date, to_date: to_date, **options)
              else
-               DhanHQ::Models::HistoricalData.intraday(params_for_api)
+               interval = (params[:interval] || '15').to_s
+               inst.intraday(from_date: from_date, to_date: to_date, interval: interval)
              end
 
     Rails.logger.info "✅ Got #{result[:close]&.length || 0} candles" if result.is_a?(Hash)
+
+    # Store timeframe in result so formatter knows how to display timestamps
+    result[:timeframe] = timeframe if result.is_a?(Hash)
 
     result
   rescue StandardError => e
@@ -659,14 +711,11 @@ class IntelligentTradingAgent
     return { error: "No instrument in context" } unless @context[:instrument]
 
     inst = @context[:instrument]
-    exchange_segment = inst.exchange_segment.to_s
-    security_id = inst.security_id.to_i
 
-    quote_response = DhanHQ::Models::MarketFeed.ohlc(
-      exchange_segment => [security_id]
-    )
+    Rails.logger.info "📊 Getting OHLC for instrument: #{inst.symbol_name}"
 
-    quote_response.dig('data', exchange_segment, security_id.to_s)
+    # Use convenience method that automatically uses instrument's attributes
+    inst.ohlc
   end
 
   def get_option_chain_for_instrument(params = {})
@@ -675,24 +724,89 @@ class IntelligentTradingAgent
     inst = @context[:instrument]
     expiry = params[:expiry]
 
+    # For indices, option chains are in NSE_FNO segment, not IDX_I
+    # IDX_I is only for index quotes/prices
+    option_segment = if inst.exchange_segment.to_s == 'IDX_I' || inst.instrument.to_s == 'INDEX'
+                       'NSE_FNO'
+                     else
+                       inst.exchange_segment.to_s
+                     end
+
+    # For indices, we need to find the underlying in NSE_FNO segment
+    # Option chains need the underlying instrument in FNO segment, not the index quote in IDX_I
+    underlying_security_id = inst.security_id
+    if inst.exchange_segment.to_s == 'IDX_I' || inst.instrument.to_s == 'INDEX'
+      Rails.logger.info "📌 Index detected (#{inst.symbol_name}), searching for underlying in NSE_FNO segment"
+      begin
+        # Try to find the same symbol in NSE_FNO (for options)
+        fno_instrument = DhanHQ::Models::Instrument.find('NSE_FNO', inst.symbol_name.upcase)
+        if fno_instrument
+          underlying_security_id = fno_instrument.security_id
+          Rails.logger.info "✅ Found underlying in NSE_FNO: #{fno_instrument.symbol_name} (ID: #{underlying_security_id})"
+        else
+          # Try with common index option names
+          index_names = {
+            'NIFTY' => 'NIFTY 50',
+            'BANKNIFTY' => 'BANKNIFTY',
+            'FINNIFTY' => 'FINNIFTY',
+            'SENSEX' => 'SENSEX'
+          }
+          search_name = index_names[inst.symbol_name.upcase] || inst.symbol_name
+          fno_instrument = DhanHQ::Models::Instrument.find('NSE_FNO', search_name.upcase)
+          if fno_instrument
+            underlying_security_id = fno_instrument.security_id
+            Rails.logger.info "✅ Found underlying in NSE_FNO: #{fno_instrument.symbol_name} (ID: #{underlying_security_id})"
+          else
+            Rails.logger.warn "⚠️ Could not find underlying in NSE_FNO, using index ID: #{underlying_security_id}"
+          end
+        end
+      rescue StandardError => e
+        Rails.logger.warn "⚠️ Error finding underlying in NSE_FNO: #{e.message}, using index ID: #{underlying_security_id}"
+      end
+    end
+
+    # For option chain, we need to use the correct instrument
+    # If we found a FNO instrument, use it; otherwise try to use the original
+    option_instrument = inst
+    if inst.exchange_segment.to_s == 'IDX_I' || inst.instrument.to_s == 'INDEX'
+      # Try to find/create an instrument for the FNO underlying
+      begin
+        if underlying_security_id != inst.security_id
+          # We found a different security_id, need to find or construct instrument
+          # For now, we'll need to manually call the API with the correct params
+          # But first, let's see if we can use the convenience method by finding the FNO instrument
+          fno_instrument = DhanHQ::Models::Instrument.find('NSE_FNO', inst.symbol_name.upcase) ||
+                          (index_names = { 'NIFTY' => 'NIFTY 50', 'BANKNIFTY' => 'BANKNIFTY', 'FINNIFTY' => 'FINNIFTY' };
+                          search_name = index_names[inst.symbol_name.upcase] || inst.symbol_name;
+                          DhanHQ::Models::Instrument.find('NSE_FNO', search_name.upcase))
+          option_instrument = fno_instrument if fno_instrument
+        end
+      rescue StandardError => e
+        Rails.logger.debug "Could not find FNO instrument: #{e.message}"
+      end
+    end
+
     # If no expiry specified, get the expiry list from DhanHQ and use the first one
     unless expiry
       Rails.logger.info "📅 No expiry specified, fetching expiry list for #{inst.symbol_name}"
 
       begin
-        # Call the expiry list endpoint - use fetch_expiry_list not expiry_list
-        response = DhanHQ::Models::OptionChain.fetch_expiry_list(
-          underlying_scrip: inst.security_id.to_i,
-          underlying_seg: inst.exchange_segment.to_s
-        )
-
-        # Parse the response to get available expiries
-        expiry_list = if response.is_a?(Hash)
-                        response[:data] || response['data'] || []
-                      elsif response.is_a?(Array)
-                        response
+        # Use convenience method if we have the right instrument, otherwise call API directly
+        expiry_list = if option_instrument && option_instrument.exchange_segment.to_s != 'IDX_I'
+                        option_instrument.expiry_list
                       else
-                        []
+                        # Fall back to manual API call for indices
+                        response = DhanHQ::Models::OptionChain.fetch_expiry_list(
+                          underlying_scrip: underlying_security_id.to_i,
+                          underlying_seg: option_segment
+                        )
+                        if response.is_a?(Hash)
+                          response[:data] || response['data'] || []
+                        elsif response.is_a?(Array)
+                          response
+                        else
+                          []
+                        end
                       end
 
         if expiry_list.is_a?(Array) && expiry_list.length > 0
@@ -715,13 +829,19 @@ class IntelligentTradingAgent
       end
     end
 
-    Rails.logger.info "🔗 Fetching option chain for #{inst.symbol_name} (expiry: #{expiry})"
+    Rails.logger.info "🔗 Fetching option chain for #{inst.symbol_name} (expiry: #{expiry}, segment: #{option_segment}, security_id: #{underlying_security_id})"
 
-    option_chain_result = DhanHQ::Models::OptionChain.fetch(
-      underlying_scrip: inst.security_id.to_s,
-      underlying_seg: inst.exchange_segment.to_s,
-      expiry: expiry
-    )
+    # Use convenience method if we have the right instrument, otherwise call API directly
+    option_chain_result = if option_instrument && option_instrument.exchange_segment.to_s != 'IDX_I'
+                            option_instrument.option_chain(expiry: expiry)
+                          else
+                            # Fall back to manual API call for indices
+                            DhanHQ::Models::OptionChain.fetch(
+                              underlying_scrip: underlying_security_id.to_s,
+                              underlying_seg: option_segment,
+                              expiry: expiry
+                            )
+                          end
 
     {
       instrument: inst,
@@ -773,35 +893,68 @@ class IntelligentTradingAgent
   def task_complete?
     # Check if we've completed the request
     return true if @completed_steps.any? && @current_step_index >= @plan.length
-    return true if @completed_steps.last&.dig(:result, :error) && @iteration > 3
+
+    # Check for error in last step (only if result is a Hash)
+    last_step = @completed_steps.last
+    if last_step && last_step[:result].is_a?(Hash) && last_step[:result][:error] && @iteration > 3
+      return true
+    end
 
     false
   end
 
+  # Memoized version (can cache wrong results, use extract_symbol_fresh when you need fresh extraction)
   def extract_symbol
-    @symbol ||= begin
-      # First, try to extract symbols that are NOT common words
-      common_words = ['OPTION', 'CHAIN', 'STOCKS', 'SHOW', 'GET', 'FOR', 'OF', 'IS', 'ME', 'MY', 'THE', 'A', 'AN']
+    @symbol ||= extract_symbol_fresh
+  end
 
-      patterns = [
-        # Pattern 1: "Get option chain for NIFTY" - extract NIFTY
-        /(?:option.*chain|chain.*option)\s+for\s+(\w+)/i,
-        # Pattern 2: "for RELIANCE", "of TCS", "is WIPRO"
-        /(?:for|of|is|get|show)\s+([A-Z]{3,})\b/i,
-        # Pattern 3: "RELIANCE price", "TCS quote"
-        /\b([A-Z]{3,})\b.*(?:price|quote|ohlc|historical|intraday|daily)/i,
-        # Pattern 4: Any standalone uppercase word at the end
-        /\b([A-Z]{3,})\b$/
-      ]
+  # Fresh symbol extraction without memoization
+  def extract_symbol_fresh
+    # Comprehensive list of common words to exclude
+    common_words = [
+      'OPTION', 'CHAIN', 'STOCKS', 'SHOW', 'GET', 'FOR', 'OF', 'IS', 'ME', 'MY', 'THE', 'A', 'AN',
+      'HISTORICAL', 'DATA', 'INTRADAY', 'DAILY', 'QUOTE', 'PRICE', 'LTP', 'OHLC', 'CANDLE', 'CHART',
+      'ACCOUNT', 'BALANCE', 'POSITION', 'HOLDING', 'ORDER', 'BUY', 'SELL', 'MARKET', 'LIMIT'
+    ]
 
-      patterns.each do |pattern|
-        match = @prompt.match(pattern)
-        if match && match[1] && match[1].length >= 3 && !common_words.include?(match[1].upcase)
-          return match[1].upcase
-        end
+    # Known stock symbols for validation
+    known_symbols = [
+      'RELIANCE', 'TCS', 'INFY', 'WIPRO', 'HDFC', 'SBI', 'AXIS', 'ICICI', 'BAJAJ', 'LT', 'HERO',
+      'MARUTI', 'TITAN', 'BRITANNIA', 'TITANGAR', 'DMART', 'ADANIENT', 'ULTRACEMCO', 'HINDUNILEVER',
+      'ASIANPAINT', 'NIFTY', 'BANKNIFTY', 'SENSEX', 'NIFTY50', 'NIFTY 50'
+    ]
+
+    patterns = [
+      # Pattern 1: "for RELIANCE", "of TCS" - most reliable when after "for/of"
+      /(?:for|of)\s+([A-Z]{3,})\b/i,
+      # Pattern 2: "Get historical data for RELIANCE" - extract after "for"
+      /(?:historical|ohlc|quote|price).*?(?:for|of)\s+([A-Z]{3,})\b/i,
+      # Pattern 3: "RELIANCE historical data" - symbol before action words
+      /\b([A-Z]{3,})\b\s+(?:historical|ohlc|quote|price|data)/i,
+      # Pattern 4: "Get option chain for NIFTY"
+      /(?:option.*chain|chain.*option)\s+for\s+(\w+)/i,
+      # Pattern 5: Any standalone uppercase word at the end (but prioritize if it's a known symbol)
+      /\b([A-Z]{3,})\b$/
+    ]
+
+    # Try patterns and prefer known symbols
+    candidates = []
+
+    patterns.each do |pattern|
+      match = @prompt.match(pattern)
+      if match && match[1] && match[1].length >= 3
+        candidate = match[1].upcase
+        next if common_words.include?(candidate)
+
+        # If it's a known symbol, return immediately
+        return candidate if known_symbols.include?(candidate)
+
+        candidates << candidate
       end
-      nil
     end
+
+    # If we found candidates, return the first one (prefer known patterns)
+    candidates.first
   end
 
   def extract_quantity
@@ -868,27 +1021,28 @@ class IntelligentTradingAgent
   end
 
   def format_final_result(result)
-    case result
-    when DhanHQ::Models::Instrument
-      format_instrument_result(result)
-    when Hash
-      if result[:error]
-        "<div class='text-red-600'>❌ #{result[:error]}</div>"
-      elsif result[:close] || result[:open] || result['close'] || result['open']
-        # Historical data (OHLCV format)
-        format_historical_data(result)
-      elsif result[:stocks] || result.is_a?(Array)
-        # Screened/ranked stocks
-        format_screened_stocks(result[:stocks] || result)
-      elsif result[:chain] || result[:expiry]
-        # Option chain result
-        format_option_chain_result(result)
-      else
-        "<pre class='text-xs overflow-auto max-h-96'>#{JSON.pretty_generate(result)}</pre>"
-      end
+    # Handle non-Hash objects first
+    return format_instrument_result(result) if result.is_a?(DhanHQ::Models::Instrument)
+    return result.to_s unless result.is_a?(Hash)
+
+    # Now we know result is a Hash, safe to use hash access
+    if result[:error]
+      "<div class='text-red-600'>❌ #{result[:error]}</div>"
+    elsif result[:close] || result[:open] || result['close'] || result['open']
+      # Historical data (OHLCV format)
+      format_historical_data(result)
+    elsif result[:stocks] || result.is_a?(Array)
+      # Screened/ranked stocks
+      format_screened_stocks(result[:stocks] || result)
+    elsif result[:chain] || result[:expiry]
+      # Option chain result
+      format_option_chain_result(result)
     else
-      result.to_s
+      "<pre class='text-xs overflow-auto max-h-96'>#{JSON.pretty_generate(result)}</pre>"
     end
+  rescue StandardError => e
+    Rails.logger.error "❌ format_final_result error: #{e.message}\n#{e.backtrace.first(3).join("\n")}"
+    "<div class='text-red-600'>❌ Error formatting result: #{e.message}</div><pre class='text-xs'>#{result.class}</pre>"
   end
 
   def format_screened_stocks(result_data)
@@ -984,14 +1138,21 @@ class IntelligentTradingAgent
   end
 
   def format_historical_data(data)
+    # Ensure data is a Hash
+    return "<p>Invalid historical data format</p>" unless data.is_a?(Hash)
+
     closes = data[:close] || data['close'] || []
     opens = data[:open] || data['open'] || []
     highs = data[:high] || data['high'] || []
     lows = data[:low] || data['low'] || []
     volumes = data[:volume] || data['volume'] || []
     timestamps = data[:timestamp] || data['timestamp'] || []
+    timeframe = data[:timeframe] || data['timeframe'] || 'intraday' # default to intraday
 
     symbol_name = @context[:instrument]&.symbol_name || "Instrument"
+
+    # Determine if daily or intraday for header and timestamp formatting
+    is_daily = timeframe.to_s.downcase == 'daily'
 
     html = <<~HTML
       <div class="bg-gradient-to-r from-blue-50 to-purple-50 p-4 rounded-lg">
@@ -1005,7 +1166,7 @@ class IntelligentTradingAgent
           <table class="w-full text-xs">
             <thead>
               <tr class="border-b">
-                <th class="text-left p-1">Time</th>
+                <th class="text-left p-1">#{is_daily ? 'Date' : 'Time'}</th>
                 <th class="text-right p-1">Open</th>
                 <th class="text-right p-1">High</th>
                 <th class="text-right p-1">Low</th>
@@ -1021,10 +1182,22 @@ class IntelligentTradingAgent
       start_idx = closes.length - candles_to_show
 
       (start_idx...closes.length).each do |i|
-        timestamp = timestamps[i] ? Time.at(timestamps[i]).strftime('%H:%M') : '-'
+        # Format timestamp based on timeframe
+        if timestamps[i]
+          begin
+            time_obj = Time.at(timestamps[i].to_f)
+            timestamp_str = is_daily ? time_obj.strftime('%Y-%m-%d') : time_obj.strftime('%H:%M')
+          rescue => e
+            Rails.logger.error "Error formatting timestamp #{timestamps[i]}: #{e.message}"
+            timestamp_str = '-'
+          end
+        else
+          timestamp_str = '-'
+        end
+
         html += <<~HTML
           <tr class="border-b">
-            <td class="p-1">#{timestamp}</td>
+            <td class="p-1">#{timestamp_str}</td>
             <td class="text-right p-1">₹#{opens[i]&.to_f&.round(2) || '-'}</td>
             <td class="text-right p-1 text-green-600">₹#{highs[i]&.to_f&.round(2) || '-'}</td>
             <td class="text-right p-1 text-red-600">₹#{lows[i]&.to_f&.round(2) || '-'}</td>

@@ -58,32 +58,44 @@ class TradingController < ApplicationController
   def quote
     symbol = params[:symbol]&.upcase
 
+    return render json: { error: 'Symbol parameter required' }, status: :unprocessable_entity if symbol.blank?
+
     # Find the instrument first to get security_id and exchange_segment
     inst = DhanHQ::Models::Instrument.find_anywhere(symbol, exact_match: true)
 
-    if inst
+    if inst && inst.exchange_segment && inst.security_id
+      # Extract values to avoid nil issues
+      exchange_segment = inst.exchange_segment.to_s
+      security_id = inst.security_id.to_i
+
+      # Create proper hash for quote call
+      quote_params = { exchange_segment => [security_id] }
+
       # Get live quote using MarketFeed.quote
-      quote_response = DhanHQ::Models::MarketFeed.quote(
-        inst.exchange_segment => [inst.security_id.to_i]
-      )
+      quote_response = DhanHQ::Models::MarketFeed.quote(quote_params)
 
       # Extract the actual quote data from nested response
-      quote_data = quote_response.dig('data', inst.exchange_segment, inst.security_id)
+      quote_data = quote_response.dig('data', exchange_segment, security_id.to_s) ||
+                   quote_response.dig('data', exchange_segment, security_id)
 
-      render json: {
-        symbol: inst.symbol_name || inst.underlying_symbol,
-        name: inst.display_name || inst.symbol_name,
-        security_id: inst.security_id,
-        exchange_segment: inst.exchange_segment,
-        last_price: quote_data&.dig('last_price'),
-        volume: quote_data&.dig('volume'),
-        ohlc: quote_data&.dig('ohlc'),
-        fifty_two_week_high: quote_data&.dig('52_week_high'),
-        fifty_two_week_low: quote_data&.dig('52_week_low'),
-        average_price: quote_data&.dig('average_price')
-      }
+      if quote_data
+        render json: {
+          symbol: inst.symbol_name || inst.underlying_symbol,
+          name: inst.display_name || inst.symbol_name,
+          security_id: security_id,
+          exchange_segment: exchange_segment,
+          last_price: quote_data['last_price'] || quote_data[:last_price],
+          volume: quote_data['volume'] || quote_data[:volume],
+          ohlc: quote_data['ohlc'] || quote_data[:ohlc] || {},
+          fifty_two_week_high: quote_data['52_week_high'] || quote_data[:fifty_two_week_high],
+          fifty_two_week_low: quote_data['52_week_low'] || quote_data[:fifty_two_week_low],
+          average_price: quote_data['average_price'] || quote_data[:average_price]
+        }
+      else
+        render json: { error: "No quote data returned for #{symbol}" }, status: :not_found
+      end
     else
-      render json: { error: "Symbol #{symbol} not found in any exchange segment" }
+      render json: { error: "Symbol #{symbol} not found in any exchange segment" }, status: :not_found
     end
   rescue StandardError => e
     render json: { error: e.message }, status: :bad_gateway
@@ -155,4 +167,3 @@ class TradingController < ApplicationController
     render json: { error: e.message }, status: :bad_gateway
   end
 end
-
