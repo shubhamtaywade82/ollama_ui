@@ -113,7 +113,6 @@ class IntelligentTradingAgent
       return
     end
 
-    current_goal = @reasoning[:goal] || @prompt
     required_tools = @reasoning[:required_tools] || []
 
     if required_tools.empty?
@@ -673,7 +672,7 @@ class IntelligentTradingAgent
     nil
   end
 
-  def get_quote_for_instrument(params = {})
+  def get_quote_for_instrument(_params = {})
     return { error: "No instrument in context" } unless @context[:instrument]
 
     inst = @context[:instrument]
@@ -718,7 +717,7 @@ class IntelligentTradingAgent
     { error: e.message }
   end
 
-  def get_ohlc_for_instrument(params = {})
+  def get_ohlc_for_instrument(_params = {})
     return { error: "No instrument in context" } unless @context[:instrument]
 
     inst = @context[:instrument]

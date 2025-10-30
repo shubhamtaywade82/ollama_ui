@@ -24,7 +24,16 @@ class DhanTradingAgent
     # Execute based on selected tool
     result = if intent[:tool]
                Rails.logger.info "🔧 Executing tool: #{intent[:tool]}"
-               execute_with_tool(intent[:tool], intent[:params])
+               case intent[:tool].to_sym
+               when :account_balance
+                 get_account_balance
+               when :positions
+                 get_positions
+               when :holdings
+                 get_holdings
+               else
+                 execute_with_tool(intent[:tool], intent[:params])
+               end
              elsif intent[:action]
                Rails.logger.info "⚡ Executing action: #{intent[:action]}"
                # Fallback to action-based routing
@@ -290,7 +299,6 @@ class DhanTradingAgent
 
   def execute_option_chain_workflow(params)
     symbol = params[:symbol] || extract_symbol_from_prompt
-
     instrument = DhanHQ::Models::Instrument.find_anywhere(symbol, exact_match: true)
     return error_response("Symbol #{symbol} not found") unless instrument
 
@@ -302,49 +310,18 @@ class DhanTradingAgent
         if expiries.is_a?(Array) && expiries.any?
           expiry = expiries.first.to_s
         else
-          # Fallback to next Thursday
           d = Date.today
           d += 1 until d.thursday?
           expiry = d.strftime('%Y-%m-%d')
         end
       rescue StandardError => e
-        # Fallback if expiry list fails
         d = Date.today
         d += 1 until d.thursday?
         expiry = d.strftime('%Y-%m-%d')
       end
     end
 
-    # Map underlying segment correctly
-    base_seg = instrument.exchange_segment.to_s
-    inst_type = instrument.instrument.to_s
-    target_seg = if base_seg == 'IDX_I' || inst_type == 'INDEX'
-                   'IDX_I'
-                 elsif base_seg.start_with?('NSE')
-                   'NSE_FNO'
-                 elsif base_seg.start_with?('BSE')
-                   'BSE_FNO'
-                 else
-                   base_seg
-                 end
-
-    # Resolve underlying security_id in the target segment (for stocks moving from EQ -> FNO)
-    underlying_sid = instrument.security_id
-    if target_seg != base_seg
-      begin
-        fno_inst = DhanHQ::Models::Instrument.find(target_seg, instrument.symbol_name.to_s.upcase)
-        underlying_sid = fno_inst.security_id if fno_inst
-      rescue StandardError
-        # fallback to original sid
-      end
-    end
-
-    # Fetch option chain via API with explicit segment mapping
-    chain = DhanHQ::Models::OptionChain.fetch(
-      underlying_scrip: underlying_sid.to_s,
-      underlying_seg: target_seg,
-      expiry: expiry
-    )
+    chain = instrument.option_chain(expiry: expiry)
 
     {
       type: :success,
@@ -361,11 +338,6 @@ class DhanTradingAgent
   end
 
   def execute_order_workflow(params)
-    symbol = params[:symbol] || extract_symbol_from_prompt
-    quantity = params[:quantity] || 1
-    price = params[:price] || 0
-    transaction_type = params[:transaction_type] || 'BUY'
-
     # This is a dangerous operation - add confirmation
     {
       type: :warning,
@@ -387,7 +359,6 @@ class DhanTradingAgent
 
   def execute_quote_workflow(params)
     symbol = normalize_symbol(params[:symbol]) || extract_symbol_from_prompt
-
     instrument = DhanHQ::Models::Instrument.find_anywhere(symbol, exact_match: true)
     return error_response("Symbol #{symbol} not found") unless instrument
 
@@ -395,32 +366,17 @@ class DhanTradingAgent
       return error_response("Instrument #{symbol} missing required fields")
     end
 
-    # Get quote with proper hash construction
-    exchange_segment = instrument.exchange_segment.to_s
-    security_id = instrument.security_id.to_i
-    quote_params = { exchange_segment => [security_id] }
-
-    quote_response = DhanHQ::Models::MarketFeed.quote(quote_params)
-
-    # Try multiple key formats for quote_data lookup
-    quote_data = quote_response.dig('data', exchange_segment, security_id.to_s) ||
-                 quote_response.dig('data', exchange_segment, security_id) ||
-                 quote_response.dig('data', exchange_segment.to_sym, security_id.to_s) ||
-                 quote_response.dig('data', exchange_segment.to_sym, security_id)
-
-    unless quote_data
-      return error_response("No quote data returned for #{symbol}. Response: #{quote_response.inspect[0..200]}")
+    begin
+      quote_data = instrument.quote
+    rescue StandardError => fetch_e
+      return error_response("No quote data returned for #{symbol}. #{fetch_e.message}")
     end
 
-    # Get historical for context (optional, don't fail if it errors)
     historical = begin
-      DhanHQ::Models::HistoricalData.intraday(
-        security_id: instrument.security_id,
-        exchange_segment: instrument.exchange_segment,
-        instrument: instrument.instrument || 'EQUITY',
-        interval: '15',
+      instrument.intraday(
         from_date: 7.days.ago.strftime('%Y-%m-%d'),
-        to_date: Date.today.strftime('%Y-%m-%d')
+        to_date: Date.today.strftime('%Y-%m-%d'),
+        interval: '15'
       )
     rescue StandardError => e
       Rails.logger.warn "Historical data fetch failed: #{e.message}"
@@ -429,16 +385,10 @@ class DhanTradingAgent
 
     {
       type: :success,
-      message: "📈 Quote for #{instrument.symbol_name || symbol}",
-      data: {
-        quote: quote_data,
-        historical: historical
-      },
+      message: "📈 Quote for #{symbol}",
+      data: { quote: quote_data, historical: historical },
       formatted: format_quote_with_analysis(instrument, quote_data, historical)
     }
-  rescue StandardError => e
-    Rails.logger.error "Quote workflow error: #{e.message}\n#{e.backtrace.first(5).join("\n")}"
-    error_response("Failed to fetch quote: #{e.message}")
   end
 
   def format_option_chain(chain_data)
@@ -548,22 +498,44 @@ class DhanTradingAgent
   end
 
   def format_quote_with_analysis(instrument, quote_data, historical_data)
-    # Handle both string and symbol keys
-    last_price = quote_data&.dig('last_price') || quote_data&.dig(:last_price) || 0
-    volume = quote_data&.dig('volume') || quote_data&.dig(:volume) || 0
+    # Defensive extraction for nested DhanHQ response format
+    last_price = 0
+    volume = 0
+    quote_hash = quote_data
 
-    # Extract OHLC from nested structure (quote_data['ohlc'] or quote_data[:ohlc])
-    ohlc = quote_data&.dig('ohlc') || quote_data&.dig(:ohlc) || {}
+    if quote_data.is_a?(Hash) && quote_data['data'].is_a?(Hash)
+      segment = instrument.exchange_segment.to_s
+      sid = instrument.security_id.to_s
+      # Accept symbol or string keys
+      seg_key = quote_data['data'][segment] || quote_data['data'][segment.to_sym]
+      q = seg_key[sid] if seg_key && seg_key[sid]
+      # Fallback if keys are integer
+      if !q && seg_key
+        q = seg_key[sid.to_i] || seg_key.values.first
+      end
+      if q.is_a?(Hash)
+        quote_hash = q
+        last_price = q['last_price'] || q[:last_price] || 0
+        volume = q['volume'] || q[:volume] || 0
+      end
+    end
+
+    # If not found, use legacy keys
+    last_price = last_price.presence || quote_data&.dig('last_price') || quote_data&.dig(:last_price) || 0
+    volume = volume.presence || quote_data&.dig('volume') || quote_data&.dig(:volume) || 0
+
+    # Extract OHLC from nested structure (quote_hash['ohlc'] or quote_hash[:ohlc])
+    ohlc = quote_hash&.dig('ohlc') || quote_hash&.dig(:ohlc) || {}
     open_price = ohlc['open'] || ohlc[:open] if ohlc
     high_price = ohlc['high'] || ohlc[:high] if ohlc
     low_price = ohlc['low'] || ohlc[:low] if ohlc
     close_price = ohlc['close'] || ohlc[:close] if ohlc
 
     # Also check for direct keys (fallback)
-    high_price ||= quote_data&.dig('high') || quote_data&.dig(:high)
-    low_price ||= quote_data&.dig('low') || quote_data&.dig(:low)
-    open_price ||= quote_data&.dig('open') || quote_data&.dig(:open)
-    close_price ||= quote_data&.dig('close') || quote_data&.dig(:close)
+    high_price ||= quote_hash&.dig('high') || quote_hash&.dig(:high)
+    low_price ||= quote_hash&.dig('low') || quote_hash&.dig(:low)
+    open_price ||= quote_hash&.dig('open') || quote_hash&.dig(:open)
+    close_price ||= quote_hash&.dig('close') || quote_hash&.dig(:close)
 
     # Format volume with commas
     volume_formatted = volume.to_i.zero? ? 'N/A' : volume.to_i.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\1,').reverse
@@ -571,12 +543,12 @@ class DhanTradingAgent
     historical_count = historical_data&.dig(:close)&.length || historical_data&.dig('close')&.length || 0
 
     # Calculate price change if possible
-    net_change = quote_data&.dig('net_change') || quote_data&.dig(:net_change) || 0
+    net_change = quote_hash&.dig('net_change') || quote_hash&.dig(:net_change) || 0
     change_display = net_change.to_f != 0 ? " <span class='text-sm #{net_change > 0 ? 'text-green-600' : 'text-red-600'}'>#{net_change > 0 ? '+' : ''}#{net_change.to_f.round(2)}</span>" : ''
 
     # Get 52-week high/low
-    high_52w = quote_data&.dig('52_week_high') || quote_data&.dig(:'52_week_high') || quote_data&.dig('fifty_two_week_high') || quote_data&.dig(:fifty_two_week_high) || 0
-    low_52w = quote_data&.dig('52_week_low') || quote_data&.dig(:'52_week_low') || quote_data&.dig('fifty_two_week_low') || quote_data&.dig(:fifty_two_week_low) || 0
+    high_52w = quote_hash&.dig('52_week_high') || quote_hash&.dig(:'52_week_high') || quote_hash&.dig('fifty_two_week_high') || quote_hash&.dig(:fifty_two_week_high) || 0
+    low_52w = quote_hash&.dig('52_week_low') || quote_hash&.dig(:'52_week_low') || quote_hash&.dig('fifty_two_week_low') || quote_hash&.dig(:fifty_two_week_low) || 0
 
     <<~HTML
       <div class="bg-gradient-to-r from-purple-50 to-blue-50 p-4 rounded-lg">
@@ -585,21 +557,9 @@ class DhanTradingAgent
           <div class="text-xs text-gray-600 mb-1">Last Traded Price</div>
           <div class="text-4xl font-bold">₹#{last_price.to_f.round(2)}#{change_display}</div>
         </div>
-
-        #{if open_price || high_price || low_price || close_price
-            '<div class="grid grid-cols-2 gap-3 text-sm mb-3">' +
-              (open_price ? "<div><div class='text-xs text-gray-500'>Open</div><div class='font-semibold'>₹#{open_price.to_f.round(2)}</div></div>" : '') +
-              (high_price ? "<div><div class='text-xs text-gray-500'>High</div><div class='font-semibold text-green-600'>₹#{high_price.to_f.round(2)}</div></div>" : '') +
-              (low_price ? "<div><div class='text-xs text-gray-500'>Low</div><div class='font-semibold text-red-600'>₹#{low_price.to_f.round(2)}</div></div>" : '') +
-              (close_price ? "<div><div class='text-xs text-gray-500'>Close</div><div class='font-semibold'>₹#{close_price.to_f.round(2)}</div></div>" : '') +
-            '</div>'
-          else
-            ''
-          end}
-
         <p class="text-sm text-gray-600 mb-2">📊 Volume: #{volume_formatted}</p>
-        #{high_52w > 0 || low_52w > 0 ? "<p class='text-xs text-gray-500 mb-2'>52W High: ₹#{high_52w.to_f.round(2)} | 52W Low: ₹#{low_52w.to_f.round(2)}</p>" : ''}
-        #{historical_count > 0 ? "<p class='text-xs text-gray-500'>📈 Historical: #{historical_count} candles available</p>" : ''}
+        #{high_52w > 0 || low_52w > 0 ? "<p class='text-xs text-gray-500'>52W High: ₹#{high_52w.to_f.round(2)} | 52W Low: ₹#{low_52w.to_f.round(2)}</p>" : ''}
+        <p class='text-xs text-gray-500'>📈 Historical: #{historical_count} candles available</p>
       </div>
     HTML
   end
@@ -893,26 +853,13 @@ class DhanTradingAgent
   end
 
   def get_live_quote(instrument)
-    # Validate instrument has required fields
-    unless instrument && instrument.exchange_segment && instrument.security_id
-      raise StandardError, 'Invalid instrument: missing exchange_segment or security_id'
+    raise StandardError, 'Invalid instrument: missing exchange_segment or security_id' unless instrument && instrument.exchange_segment && instrument.security_id
+    begin
+      quote_data = instrument.quote
+    rescue StandardError => e
+      Rails.logger.error "❌ get_live_quote failed: #{e.message}"
+      raise
     end
-
-    exchange_segment = instrument.exchange_segment.to_s
-    security_id = instrument.security_id.to_i
-
-    # Create proper hash for quote call
-    quote_params = { exchange_segment => [security_id] }
-
-    quote_response = DhanHQ::Models::MarketFeed.quote(quote_params)
-
-    # Try multiple key formats for quote_data lookup
-    quote_data = quote_response.dig('data', exchange_segment, security_id.to_s) ||
-                 quote_response.dig('data', exchange_segment, security_id) ||
-                 quote_response.dig('data', exchange_segment)
-
-    raise StandardError, "No quote data returned for #{instrument.symbol_name}" unless quote_data
-
     {
       last_price: quote_data['last_price'] || quote_data[:last_price],
       volume: quote_data['volume'] || quote_data[:volume],
@@ -920,9 +867,6 @@ class DhanTradingAgent
       high_52w: quote_data['52_week_high'] || quote_data[:fifty_two_week_high] || quote_data[:high_52w],
       low_52w: quote_data['52_week_low'] || quote_data[:fifty_two_week_low] || quote_data[:low_52w]
     }
-  rescue StandardError => e
-    Rails.logger.error "❌ get_live_quote failed: #{e.message}"
-    raise
   end
 
   def fetch_historical(instrument, timeframe, interval)
