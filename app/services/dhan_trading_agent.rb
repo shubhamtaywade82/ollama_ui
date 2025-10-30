@@ -13,7 +13,7 @@ class DhanTradingAgent
 
     # Check if we need iterative refinement for complex tasks
     if requires_iteration?
-      Rails.logger.info "📋 Using iterative agent"
+      Rails.logger.info '📋 Using iterative agent'
       return execute_with_iteration
     end
 
@@ -53,7 +53,7 @@ class DhanTradingAgent
                else
                  # Try direct quote detection as fallback
                  if @user_prompt.match?(/\b(quote|price|ltp|last price|current price)\b/) && extract_symbol_from_prompt
-                   Rails.logger.info "🎯 Fallback: Direct quote detection"
+                   Rails.logger.info '🎯 Fallback: Direct quote detection'
                    get_quote_details
                  else
                    general_help
@@ -61,13 +61,13 @@ class DhanTradingAgent
                end
              else
                # Try direct quote detection as final fallback
-               Rails.logger.info "🔄 Final fallback: Checking for quote request"
+               Rails.logger.info '🔄 Final fallback: Checking for quote request'
                if @user_prompt.match?(/\b(quote|price|ltp|last price|current price)\b/) && extract_symbol_from_prompt
                  symbol = extract_symbol_from_prompt
                  Rails.logger.info "✅ Detected quote for symbol: #{symbol}"
                  get_quote_details
                else
-                 Rails.logger.warn "⚠️ No intent matched, returning help"
+                 Rails.logger.warn '⚠️ No intent matched, returning help'
                  general_help
                end
              end
@@ -76,13 +76,30 @@ class DhanTradingAgent
 
     # Ensure result has required fields
     if result.nil?
-      Rails.logger.error "❌ Result is nil!"
-      return error_response("Unexpected error: no result returned")
+      Rails.logger.error '❌ Result is nil!'
+      return error_response('Unexpected error: no result returned')
     end
 
     unless result.is_a?(Hash) && result[:type] && result[:formatted]
       Rails.logger.error "❌ Result missing required fields! Result: #{result.inspect[0..200]}"
-      return error_response("Result format invalid: missing type or formatted")
+      return error_response('Result format invalid: missing type or formatted')
+    end
+
+    # FINAL LLM SUMMARIZATION STEP (only LLM response used)
+    llm_summary = nil
+    begin
+      llm_summary = llm_summarize_final(@prompt, result[:data])
+    rescue StandardError => e
+      Rails.logger.error "LLM summarize_final error: #{e.message}"
+    end
+    if llm_summary.present?
+      result[:formatted] = llm_summary
+    else
+      result[:formatted] = "<div class='text-yellow-600'>⚠️ LLM summarization failed. Showing raw data.</div>" \
+                           "<pre class='text-xs'>" +
+                           JSON.pretty_generate(result[:data]) +
+                           '</pre>'
+      Rails.logger.warn 'LLM failed or returned blank—falling back to raw JSON for :formatted.'
     end
 
     result
@@ -100,7 +117,7 @@ class DhanTradingAgent
       @user_prompt.include?('candle') ||
       @user_prompt.include?('chart') ||
       (@user_prompt.include?('option') && @user_prompt.include?('chain')) ||
-      (@user_prompt.match?(/buy|sell|order/) && !@user_prompt.include?('show')) ||
+      (@user_prompt.match?(/buy|sell|order/) && @user_prompt.exclude?('show')) ||
       @user_prompt.include?('analyze') ||
       @user_prompt.include?('compare')
 
@@ -163,9 +180,7 @@ class DhanTradingAgent
 
   def format_result_for_display(result)
     # Handle Instrument objects
-    if result.is_a?(DhanHQ::Models::Instrument)
-      return format_instrument_for_display(result)
-    end
+    return format_instrument_for_display(result) if result.is_a?(DhanHQ::Models::Instrument)
 
     # Handle Hash results
     if result.is_a?(Hash)
@@ -199,7 +214,7 @@ class DhanTradingAgent
     if tool_name.to_s.include?('search_instrument') || tool_name.to_s.include?('instrument')
       # If this is part of a quote request, use quote workflow instead
       if @user_prompt.match?(/\b(quote|price|ltp|last price|current price)\b/)
-        Rails.logger.info "🔄 search_instrument detected for quote request, routing to quote workflow"
+        Rails.logger.info '🔄 search_instrument detected for quote request, routing to quote workflow'
         symbol = normalize_symbol(params[:symbol]) || extract_symbol_from_prompt
         return execute_workflow(:quote_with_analysis, { symbol: symbol }.merge(params.reject { |k| k == :symbol }))
       else
@@ -233,7 +248,7 @@ class DhanTradingAgent
 
           # If it's a quote-related tool that failed, try workflow instead
           if tool_name.to_s.include?('quote') || @user_prompt.match?(/\b(quote|price|ltp)\b/)
-            Rails.logger.info "🔄 Retrying with quote workflow"
+            Rails.logger.info '🔄 Retrying with quote workflow'
             symbol = normalize_symbol(params[:symbol]) || extract_symbol_from_prompt
             return execute_workflow(:quote_with_analysis, { symbol: symbol }.merge(params.reject { |k| k == :symbol }))
           end
@@ -299,6 +314,8 @@ class DhanTradingAgent
 
   def execute_option_chain_workflow(params)
     symbol = params[:symbol] || extract_symbol_from_prompt
+    return error_response('Symbol not found in user prompt.') if symbol.blank?
+
     instrument = DhanHQ::Models::Instrument.find_anywhere(symbol, exact_match: true)
     return error_response("Symbol #{symbol} not found") unless instrument
 
@@ -310,12 +327,12 @@ class DhanTradingAgent
         if expiries.is_a?(Array) && expiries.any?
           expiry = expiries.first.to_s
         else
-          d = Date.today
+          d = Time.zone.today
           d += 1 until d.thursday?
           expiry = d.strftime('%Y-%m-%d')
         end
-      rescue StandardError => e
-        d = Date.today
+      rescue StandardError
+        d = Time.zone.today
         d += 1 until d.thursday?
         expiry = d.strftime('%Y-%m-%d')
       end
@@ -337,8 +354,9 @@ class DhanTradingAgent
     }
   end
 
-  def execute_order_workflow(params)
-    # This is a dangerous operation - add confirmation
+  def execute_order_workflow(_params)
+    # Order execution is disabled for safety in this environment
+    # Do not assign unused variables
     {
       type: :warning,
       message: '🔴 DANGER: Order execution disabled',
@@ -352,6 +370,7 @@ class DhanTradingAgent
     return symbol.to_s.upcase if symbol.is_a?(String)
     return symbol[:symbol].to_s.upcase if symbol.is_a?(Hash) && symbol[:symbol]
     return symbol['symbol'].to_s.upcase if symbol.is_a?(Hash) && symbol['symbol']
+
     symbol.to_s.upcase
   rescue StandardError
     nil
@@ -359,35 +378,24 @@ class DhanTradingAgent
 
   def execute_quote_workflow(params)
     symbol = normalize_symbol(params[:symbol]) || extract_symbol_from_prompt
+    Rails.logger.debug symbol
+    return error_response('Could not extract trading symbol from your prompt.') if symbol.blank?
+
     instrument = DhanHQ::Models::Instrument.find_anywhere(symbol, exact_match: true)
     return error_response("Symbol #{symbol} not found") unless instrument
 
-    unless instrument.exchange_segment && instrument.security_id
-      return error_response("Instrument #{symbol} missing required fields")
-    end
-
+    quote_data = nil
     begin
       quote_data = instrument.quote
-    rescue StandardError => fetch_e
-      return error_response("No quote data returned for #{symbol}. #{fetch_e.message}")
-    end
-
-    historical = begin
-      instrument.intraday(
-        from_date: 7.days.ago.strftime('%Y-%m-%d'),
-        to_date: Date.today.strftime('%Y-%m-%d'),
-        interval: '15'
-      )
     rescue StandardError => e
-      Rails.logger.warn "Historical data fetch failed: #{e.message}"
-      nil
+      return error_response("No quote data returned for #{symbol}. #{e.message}")
     end
 
     {
       type: :success,
       message: "📈 Quote for #{symbol}",
-      data: { quote: quote_data, historical: historical },
-      formatted: format_quote_with_analysis(instrument, quote_data, historical)
+      data: { quote: quote_data }
+      # formatted: handled by final LLM call.
     }
   end
 
@@ -444,8 +452,10 @@ class DhanTradingAgent
 
     fmt_bucket = lambda do |hash, strike|
       return hash[strike.to_s] if hash.key?(strike.to_s)
+
       k6 = format('%.6f', strike)
       return hash[k6] if hash.key?(k6)
+
       k = hash.keys.find { |kk| kk.to_s.to_f == strike }
       k ? hash[k] : nil
     end
@@ -461,27 +471,27 @@ class DhanTradingAgent
       pe_ltp = (pe[:last_price] || pe['last_price']).to_f
       ce_oi  = (ce[:oi] || ce['oi']).to_i
       pe_oi  = (pe[:oi] || pe['oi']).to_i
-      ce_bid = (ce[:top_bid_price] || ce['top_bid_price'] || ce[:best_bid_price] || ce['best_bid_price'])
-      ce_ask = (ce[:top_ask_price] || ce['top_ask_price'] || ce[:best_ask_price] || ce['best_ask_price'])
-      pe_bid = (pe[:top_bid_price] || pe['top_bid_price'] || pe[:best_bid_price] || pe['best_bid_price'])
-      pe_ask = (pe[:top_ask_price] || pe['top_ask_price'] || pe[:best_ask_price] || pe['best_ask_price'])
+      ce_bid = ce[:top_bid_price] || ce['top_bid_price'] || ce[:best_bid_price] || ce['best_bid_price']
+      ce_ask = ce[:top_ask_price] || ce['top_ask_price'] || ce[:best_ask_price] || ce['best_ask_price']
+      pe_bid = pe[:top_bid_price] || pe['top_bid_price'] || pe[:best_bid_price] || pe['best_bid_price']
+      pe_ask = pe[:top_ask_price] || pe['top_ask_price'] || pe[:best_ask_price] || pe['best_ask_price']
 
       is_atm = (s.to_f.round(2) == atm.to_f.round(2))
       row_class = is_atm ? 'bg-yellow-50' : ''
       row_style = is_atm ? 'style="background: rgba(250,204,21,0.25); font-weight:600;"' : ''
-      strike_label = is_atm ? "<span class=\"ml-1 text-[10px] px-1 py-0.5 rounded bg-yellow-200 text-yellow-900 align-middle\">ATM</span>" : ''
+      strike_label = is_atm ? '<span class="ml-1 text-[10px] px-1 py-0.5 rounded bg-yellow-200 text-yellow-900 align-middle">ATM</span>' : ''
 
       html += <<~HTML
         <tr class="border-b #{row_class}" #{row_style}>
-          <td class="text-right p-1">#{ce_ltp > 0 ? ce_ltp.round(2) : '-'}</td>
-          <td class="text-right p-1">#{ce_oi > 0 ? ce_oi.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse : '-'}</td>
-          <td class="text-right p-1">#{ce_iv > 0 ? ce_iv.round(2) : '-'}</td>
+          <td class="text-right p-1">#{ce_ltp.positive? ? ce_ltp.round(2) : '-'}</td>
+          <td class="text-right p-1">#{ce_oi.positive? ? ce_oi.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse : '-'}</td>
+          <td class="text-right p-1">#{ce_iv.positive? ? ce_iv.round(2) : '-'}</td>
           <td class="text-right p-1">#{ce_bid ? ce_bid.to_f.round(2) : '-'} / #{ce_ask ? ce_ask.to_f.round(2) : '-'}</td>
           <td class="text-center p-1 font-semibold">#{s.to_i} #{strike_label}</td>
           <td class="text-right p-1">#{pe_bid ? pe_bid.to_f.round(2) : '-'} / #{pe_ask ? pe_ask.to_f.round(2) : '-'}</td>
-          <td class="text-right p-1">#{pe_iv > 0 ? pe_iv.round(2) : '-'}</td>
-          <td class="text-right p-1">#{pe_oi > 0 ? pe_oi.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse : '-'}</td>
-          <td class="text-right p-1">#{pe_ltp > 0 ? pe_ltp.round(2) : '-'}</td>
+          <td class="text-right p-1">#{pe_iv.positive? ? pe_iv.round(2) : '-'}</td>
+          <td class="text-right p-1">#{pe_oi.positive? ? pe_oi.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse : '-'}</td>
+          <td class="text-right p-1">#{pe_ltp.positive? ? pe_ltp.round(2) : '-'}</td>
         </tr>
       HTML
     end
@@ -510,9 +520,7 @@ class DhanTradingAgent
       seg_key = quote_data['data'][segment] || quote_data['data'][segment.to_sym]
       q = seg_key[sid] if seg_key && seg_key[sid]
       # Fallback if keys are integer
-      if !q && seg_key
-        q = seg_key[sid.to_i] || seg_key.values.first
-      end
+      q = seg_key[sid.to_i] || seg_key.values.first if !q && seg_key
       if q.is_a?(Hash)
         quote_hash = q
         last_price = q['last_price'] || q[:last_price] || 0
@@ -544,7 +552,13 @@ class DhanTradingAgent
 
     # Calculate price change if possible
     net_change = quote_hash&.dig('net_change') || quote_hash&.dig(:net_change) || 0
-    change_display = net_change.to_f != 0 ? " <span class='text-sm #{net_change > 0 ? 'text-green-600' : 'text-red-600'}'>#{net_change > 0 ? '+' : ''}#{net_change.to_f.round(2)}</span>" : ''
+    change_display = if net_change.to_f.zero?
+                       ''
+                     else
+                       " <span class='text-sm #{net_change.positive? ? 'text-green-600' : 'text-red-600'}'>#{if net_change.positive?
+                                                                                                               '+'
+                                                                                                             end}#{net_change.to_f.round(2)}</span>"
+                     end
 
     # Get 52-week high/low
     high_52w = quote_hash&.dig('52_week_high') || quote_hash&.dig(:'52_week_high') || quote_hash&.dig('fifty_two_week_high') || quote_hash&.dig(:fifty_two_week_high) || 0
@@ -558,7 +572,9 @@ class DhanTradingAgent
           <div class="text-4xl font-bold">₹#{last_price.to_f.round(2)}#{change_display}</div>
         </div>
         <p class="text-sm text-gray-600 mb-2">📊 Volume: #{volume_formatted}</p>
-        #{high_52w > 0 || low_52w > 0 ? "<p class='text-xs text-gray-500'>52W High: ₹#{high_52w.to_f.round(2)} | 52W Low: ₹#{low_52w.to_f.round(2)}</p>" : ''}
+        #{if high_52w.positive? || low_52w.positive?
+            "<p class='text-xs text-gray-500'>52W High: ₹#{high_52w.to_f.round(2)} | 52W Low: ₹#{low_52w.to_f.round(2)}</p>"
+          end}
         <p class='text-xs text-gray-500'>📈 Historical: #{historical_count} candles available</p>
       </div>
     HTML
@@ -596,7 +612,7 @@ class DhanTradingAgent
     return 'No historical data available' unless result
 
     closes = result[:close] || result['close'] || []
-    if closes.is_a?(Array) && closes.length > 0
+    if closes.is_a?(Array) && !closes.empty?
       last_close = closes.last.to_f.round(2)
       return "<p>📊 Historical data: #{closes.length} candles, Last close: ₹#{last_close}</p>"
     end
@@ -762,7 +778,7 @@ class DhanTradingAgent
 
   def get_quote_details(symbol = nil)
     symbol = normalize_symbol(symbol) || extract_symbol_from_prompt
-    return error_response('Please specify a symbol') unless symbol
+    return error_response('Please specify a symbol') if symbol.blank?
 
     inst = DhanHQ::Models::Instrument.find_anywhere(symbol, exact_match: true)
     return error_response("Symbol #{symbol} not found") unless inst
@@ -785,7 +801,7 @@ class DhanTradingAgent
 
   def get_historical_data(symbol = nil, timeframe = nil, interval = nil)
     symbol ||= extract_symbol_from_prompt
-    return error_response('Please specify a symbol') unless symbol
+    return error_response('Please specify a symbol') if symbol.blank?
 
     inst = DhanHQ::Models::Instrument.find_anywhere(symbol, exact_match: true)
     return error_response("Symbol #{symbol} not found") unless inst
@@ -811,7 +827,7 @@ class DhanTradingAgent
 
   def search_instrument(symbol = nil)
     symbol ||= extract_symbol_from_prompt
-    return error_response('Please specify a symbol to search') unless symbol
+    return error_response('Please specify a symbol to search') if symbol.blank?
 
     inst = DhanHQ::Models::Instrument.find_anywhere(symbol, exact_match: false)
     return error_response("No instrument found for #{symbol}") unless inst
@@ -837,14 +853,42 @@ class DhanTradingAgent
 
   # Helper methods
 
+  # --- Symbol Extraction ---
+  # Always use LLM intent[:symbol] if available. Only use LLM fallback if not present.
   def extract_symbol_from_prompt
-    match = @user_prompt.match(/\b(reliance|tcs|infy|wipro|hdfc|sbi|axis|icici|bajaj|lt|hero|maruti|titangar|britannia|titan|dmart|adanient|ultracemco|hindunilever|asianpaint|nifty|banknifty|sensex)\b/i)
-    if match && match[1].is_a?(String)
-      match[1].upcase
-    else
-      uppercase_match = @user_prompt.match(/\b([A-Z]{3,})\b/)
-      uppercase_match ? uppercase_match[1] : nil
+    return nil if @prompt.blank?
+
+    symbol = @intent[:symbol] if defined?(@intent) && @intent.is_a?(Hash)
+    symbol = symbol.to_s.strip.upcase if symbol.present?
+    # LLM fallback extraction with short timeout
+    if symbol.blank?
+      begin
+        Timeout.timeout(10) do
+          symbol = llm_extract_symbol(@prompt)
+        end
+      rescue StandardError => e
+        Rails.logger.error "LLM symbol extract timed out or failed: #{e.message}"
+      end
     end
+    # LAST RESORT: fallback to uppercase token heuristic if LLM is down
+    if symbol.blank? && @prompt.present?
+      symbol = @prompt.scan(/\b[A-Z]{3,}\b/).last
+      Rails.logger.info "Symbol fallback extracted: #{symbol.inspect}" if symbol
+    end
+    symbol.presence
+  end
+
+  def llm_extract_symbol(prompt)
+    extract_prompt = <<~PROMPT
+      User request: "#{prompt}"
+      Extract and return ONLY the trading symbol or instrument (e.g. NSE/BSE stocks, futures, indices) in uppercase. If no clear symbol is present, reply with "" (empty string).
+    PROMPT
+    result = Trading::LlmClient.new.chat!([{ role: 'user', content: extract_prompt }])
+    s = result.to_s.strip.upcase
+    s.match?(/[A-Z]{3,}/) ? s : nil
+  rescue StandardError => e
+    Rails.logger.error "LLM symbol extract failed: #{e.message}"
+    nil
   end
 
   def extract_interval
@@ -853,7 +897,11 @@ class DhanTradingAgent
   end
 
   def get_live_quote(instrument)
-    raise StandardError, 'Invalid instrument: missing exchange_segment or security_id' unless instrument && instrument.exchange_segment && instrument.security_id
+    unless instrument&.exchange_segment && instrument.security_id
+      raise StandardError,
+            'Invalid instrument: missing exchange_segment or security_id'
+    end
+
     begin
       quote_data = instrument.quote
     rescue StandardError => e
@@ -875,7 +923,7 @@ class DhanTradingAgent
       exchange_segment: instrument.exchange_segment,
       instrument: instrument.instrument,
       from_date: 7.days.ago.strftime('%Y-%m-%d'),
-      to_date: Date.today.strftime('%Y-%m-%d')
+      to_date: Time.zone.today.strftime('%Y-%m-%d')
     }
     params[:interval] = interval if timeframe == 'intraday'
 
@@ -968,13 +1016,15 @@ class DhanTradingAgent
           <div class="text-4xl font-bold">₹#{last_price.to_f.round(2)}</div>
         </div>
         <p class="text-sm text-gray-600 mb-2">📊 Volume: #{volume_formatted}</p>
-        #{high_52w > 0 || low_52w > 0 ? "<p class='text-xs text-gray-500'>52W High: ₹#{high_52w.to_f.round(2)} | 52W Low: ₹#{low_52w.to_f.round(2)}</p>" : ''}
+        #{if high_52w.positive? || low_52w.positive?
+            "<p class='text-xs text-gray-500'>52W High: ₹#{high_52w.to_f.round(2)} | 52W Low: ₹#{low_52w.to_f.round(2)}</p>"
+          end}
       </div>
     HTML
   end
 
   def format_historical(instrument, data, timeframe)
-    return '<p>No historical data available</p>' unless data && data[:close] && data[:close].length > 0
+    return '<p>No historical data available</p>' unless data && data[:close] && !data[:close].empty?
 
     closes = data[:close] || []
     last_price = begin
@@ -1011,5 +1061,25 @@ class DhanTradingAgent
       message: message,
       formatted: "❌ #{message}"
     }
+  end
+
+  def llm_summarize_final(prompt, result_data)
+    summary_prompt = <<~PROMPT
+      User request: "#{prompt}"
+
+      Tool/API result data (JSON):
+      #{JSON.pretty_generate(result_data)[0..2000]}
+
+      Please provide a concise, user-friendly summary for a trading chat UI. If relevant, highlight key facts (e.g. last price, volume, option chain rows) and interpret results. For errors, use clear explanations. Markdown/HTML allowed for price/volume/table, but keep conversational style.
+      ---
+      Your reply:
+    PROMPT
+
+    response = Trading::LlmClient.new.chat!([{ role: 'user', content: summary_prompt }])
+    Rails.logger.info "LLM SUMMARY RESPONSE: #{response.inspect[0..500]}"
+    response
+  rescue StandardError => e
+    Rails.logger.error "LLM summarization failed: #{e.message}"
+    nil
   end
 end

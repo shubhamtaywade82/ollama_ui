@@ -5,10 +5,12 @@ require 'http'
 class OllamaClient
   # Use the .env file value or default to localhost
   OLLAMA_HOST = if File.exist?('.env')
-                   File.readlines('.env').find { |line| line.start_with?('OLLAMA_HOST=') }&.split('=', 2)&.last&.strip || 'http://localhost:11434'
-                 else
-                   'http://localhost:11434'
-                 end
+                  File.readlines('.env').find do |line|
+                    line.start_with?('OLLAMA_HOST=')
+                  end&.split('=', 2)&.last&.strip || 'http://localhost:11434'
+                else
+                  'http://localhost:11434'
+                end
   OLLAMA_API_KEY = 'ollama' # Default API key for Ollama
 
   def initialize
@@ -32,7 +34,7 @@ class OllamaClient
   end
 
   def chat(model:, prompt:)
-    puts "DEBUG: Sending chat request to #{OLLAMA_HOST}/v1 with model: #{model}"
+    Rails.logger.debug { "DEBUG: Sending chat request to #{OLLAMA_HOST}/v1 with model: #{model}" }
 
     response = @client.chat(
       parameters: {
@@ -43,16 +45,16 @@ class OllamaClient
       }
     )
 
-    puts "DEBUG: Chat response received"
+    Rails.logger.debug 'DEBUG: Chat response received'
     response.dig('choices', 0, 'message', 'content').to_s
-  rescue Net::ReadTimeout => e
-    raise "Request timed out. The model may be loading or responding slowly. Try again or use a smaller model."
+  rescue Net::ReadTimeout
+    raise 'Request timed out. The model may be loading or responding slowly. Try again or use a smaller model.'
   rescue StandardError => e
-    puts "DEBUG: Chat error: #{e.class} - #{e.message}"
+    Rails.logger.debug { "DEBUG: Chat error: #{e.class} - #{e.message}" }
     raise "Failed to chat with Ollama: #{e.message}"
   end
 
-  def chat_stream(model:, prompt:, &block)
+  def chat_stream(model:, prompt:)
     require 'net/http'
     require 'uri'
     require 'json'
@@ -64,7 +66,7 @@ class OllamaClient
       stream: true
     }
 
-    puts "DEBUG: Starting stream to #{uri}"
+    Rails.logger.debug { "DEBUG: Starting stream to #{uri}" }
 
     http = Net::HTTP.new(uri.host, uri.port)
     http.read_timeout = 300
@@ -84,22 +86,20 @@ class OllamaClient
 
           begin
             data = JSON.parse(line)
-            if data['response']
-              block.call({ type: 'content', text: data['response'] })
-            end
+            yield({ type: 'content', text: data['response'] }) if data['response']
             if data['done'] == true
-              puts "DEBUG: Stream complete"
+              Rails.logger.debug 'DEBUG: Stream complete'
               break
             end
           rescue JSON::ParserError => e
-            puts "DEBUG: Parse error: #{e.message}"
+            Rails.logger.debug { "DEBUG: Parse error: #{e.message}" }
           end
         end
       end
     end
   rescue StandardError => e
-    puts "DEBUG: Stream error: #{e.class} - #{e.message}"
-    puts e.backtrace.first(5)
+    Rails.logger.debug { "DEBUG: Stream error: #{e.class} - #{e.message}" }
+    Rails.logger.debug e.backtrace.first(5)
     raise "Failed to stream from Ollama: #{e.message}"
   end
 end

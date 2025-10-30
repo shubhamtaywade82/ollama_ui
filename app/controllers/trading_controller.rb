@@ -63,7 +63,7 @@ class TradingController < ApplicationController
     # Find the instrument first to get security_id and exchange_segment
     inst = DhanHQ::Models::Instrument.find_anywhere(symbol, exact_match: true)
 
-    if inst && inst.exchange_segment && inst.security_id
+    if inst&.exchange_segment && inst.security_id
       # Extract values to avoid nil issues
       exchange_segment = inst.exchange_segment.to_s
       security_id = inst.security_id.to_i
@@ -122,12 +122,51 @@ class TradingController < ApplicationController
     }, status: :bad_gateway
   end
 
+  def agent_stream
+    response.headers['Content-Type'] = 'text/event-stream'
+    response.headers['Cache-Control'] = 'no-cache'
+    begin
+      user_prompt = params[:prompt].to_s
+      runner = Trading::AgentRunner.new(goal: user_prompt)
+      result = runner.run
+
+      result[:steps].each do |step|
+        sse_payload = {
+          type: 'step',
+          data: {
+            step: step[:step],
+            tool_call: step[:tool_call],
+            observation: step[:observation],
+            requested_at: step[:requested_at]
+          }
+        }
+        response.stream.write("data: #{sse_payload.to_json}\n\n")
+      end
+
+      final_event = {
+        type: 'done',
+        data: {
+          ok: result[:ok],
+          steps_taken: result[:steps_taken],
+          note: result[:note],
+          goal: result[:goal]
+        }
+      }
+      response.stream.write("data: #{final_event.to_json}\n\n")
+    rescue StandardError => e
+      error_event = { type: 'error', data: { error: e.message } }
+      response.stream.write("data: #{error_event.to_json}\n\n")
+    ensure
+      response.stream.close
+    end
+  end
+
   def historical
     symbol = params[:symbol]&.upcase
     timeframe = params[:timeframe] || 'intraday' # 'intraday' or 'daily'
     interval = params[:interval] || '15' # minutes for intraday
     from_date = params[:from_date] || 7.days.ago.strftime('%Y-%m-%d')
-    to_date = params[:to_date] || Date.today.strftime('%Y-%m-%d')
+    to_date = params[:to_date] || Time.zone.today.strftime('%Y-%m-%d')
 
     # Find the instrument
     inst = DhanHQ::Models::Instrument.find_anywhere(symbol, exact_match: true)

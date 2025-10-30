@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 Rails.application.routes.draw do
   # Define your application routes per the DSL in https://guides.rubyonrails.org/routing.html
 
@@ -25,6 +27,7 @@ Rails.application.routes.draw do
   get '/trading/quote', to: 'trading#quote'
   get '/trading/historical', to: 'trading#historical'
   post '/trading/agent', to: 'trading#agent' # AI Agent endpoint
+  post '/trading/agent_stream', to: 'trading#agent_stream' # AI Agent streaming endpoint
 
   # DhanHQ Market Data API (reliable wrapper)
   namespace :dhan do

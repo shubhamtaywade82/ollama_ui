@@ -238,8 +238,6 @@ module DhanAgentToolMapper
     { error: "Wrong number of arguments for #{tool_name}: #{e.message}" }
   end
 
-  private
-
   def self.infer_type(param_name)
     case param_name.to_s
     when /date|time/

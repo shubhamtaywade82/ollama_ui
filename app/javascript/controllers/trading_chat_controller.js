@@ -122,26 +122,35 @@ export default class extends Controller {
 
       if (agentResponse) {
         // Handle different response formats
-        let content = '';
+        let content = "";
         if (agentResponse.formatted) {
           content = agentResponse.formatted;
         } else if (agentResponse.data) {
           // If formatted is missing but data exists, try to format it
-          if (typeof agentResponse.data === 'object') {
-            content = `<pre class="text-xs overflow-auto">${JSON.stringify(agentResponse.data, null, 2)}</pre>`;
+          if (typeof agentResponse.data === "object") {
+            content = `<pre class="text-xs overflow-auto">${JSON.stringify(
+              agentResponse.data,
+              null,
+              2
+            )}</pre>`;
           } else {
             content = String(agentResponse.data);
           }
         } else if (agentResponse.message) {
           content = agentResponse.message;
-        } else if (typeof agentResponse === 'string') {
+        } else if (typeof agentResponse === "string") {
           content = agentResponse;
         } else {
           // Fallback: show error message with object details
-          content = `<div class="text-yellow-600">⚠️ Response received but format unexpected</div><pre class="text-xs overflow-auto">${JSON.stringify(agentResponse, null, 2)}</pre>`;
+          content = `<div class="text-yellow-600">⚠️ Response received but format unexpected</div><pre class="text-xs overflow-auto">${JSON.stringify(
+            agentResponse,
+            null,
+            2
+          )}</pre>`;
         }
 
-        this.currentMessageElement.querySelector(".message-content").innerHTML = content;
+        this.currentMessageElement.querySelector(".message-content").innerHTML =
+          content;
         this.scrollToBottom();
         return;
       }
@@ -154,25 +163,22 @@ export default class extends Controller {
           tradingResponse;
         this.scrollToBottom();
       } else {
-        // Send to AI for general chat
-        const res = await fetch("/chats/stream", {
+        // STREAMING AGENT LLM RESPONSE
+        const res = await fetch("/trading/agent_stream", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             "X-CSRF-Token": this.csrf(),
           },
-          body: JSON.stringify({
-            model: "qwen2.5:1.5b-instruct",
-            prompt: `You are a trading assistant. Help with stock market questions. User asked: ${prompt}`,
-          }),
+          body: JSON.stringify({ prompt }),
         });
 
-        if (!res.ok) throw new Error("AI chat failed");
+        if (!res.ok) throw new Error("Agent stream failed");
 
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
-
+        this.accumulatedText = "";
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -183,10 +189,21 @@ export default class extends Controller {
 
           for (const line of lines) {
             if (line.startsWith("data: ")) {
-              const data = JSON.parse(line.slice(6));
-              if (data.type === "content" && data.text) {
-                if (!this.accumulatedText) this.accumulatedText = "";
-                this.accumulatedText += data.text;
+              try {
+                let data = JSON.parse(line.slice(6));
+                let txt = typeof data === "string" ? data : data.text || data;
+                if (txt) {
+                  this.accumulatedText += txt;
+                  const html = marked.parse(this.accumulatedText);
+                  this.currentMessageElement.querySelector(
+                    ".message-content"
+                  ).innerHTML = html;
+                  this.scrollToBottom();
+                }
+              } catch (e) {
+                // Sometimes LLM streams raw text line, not JSON. Accept as markdown.
+                const txt = line.replace(/^data: /, "");
+                this.accumulatedText += txt;
                 const html = marked.parse(this.accumulatedText);
                 this.currentMessageElement.querySelector(
                   ".message-content"

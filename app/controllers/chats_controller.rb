@@ -46,7 +46,7 @@ class ChatsController < ApplicationController
       response.stream.write("data: #{chunk.to_json}\n\n")
     end
   rescue StandardError => e
-    response.stream.write("data: #{ { error: e.message }.to_json }\n\n")
+    response.stream.write("data: #{{ error: e.message }.to_json}\n\n")
   ensure
     response.stream.close
   end

@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require "yaml"
+require 'yaml'
 
 module Trading
   # Central access point for trading-agent configuration.
@@ -10,7 +10,7 @@ module Trading
     def settings
       @settings ||= begin
         raw = load_yaml
-        env_config = raw.fetch(Rails.env, {}).presence || raw.fetch("default", {})
+        env_config = raw.fetch(Rails.env, {}).presence || raw.fetch('default', {})
         deep_symbolize(env_config)
       end
     end
@@ -30,7 +30,7 @@ module Trading
     private
 
     def load_yaml
-      path = Rails.root.join("config", "trading.yml")
+      path = Rails.root.join('config/trading.yml')
       return {} unless File.exist?(path)
 
       YAML.load_file(path) || {}

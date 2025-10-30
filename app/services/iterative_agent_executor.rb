@@ -30,7 +30,7 @@ class IterativeAgentExecutor
       # REFINE: Decide if we need to adjust
       break if should_complete?(observation)
 
-      refine_plan_based_on(observation) if !result[:success]
+      refine_plan_based_on(observation) unless result[:success]
     end
 
     compile_final_result
@@ -54,7 +54,7 @@ class IterativeAgentExecutor
     PROMPT
 
     ai_response = OllamaClient.new.chat(
-      model: "qwen2.5:1.5b-instruct",
+      model: 'qwen2.5:1.5b-instruct',
       prompt: plan_prompt
     )
 
@@ -92,7 +92,7 @@ class IterativeAgentExecutor
 
   def execute_current_step
     current_step = @plan[@execution_results.length]
-    return { success: true, result: "No more steps" } unless current_step
+    return { success: true, result: 'No more steps' } unless current_step
 
     Rails.logger.info "Executing step #{current_step[:step]}: #{current_step[:description]}"
 
@@ -111,7 +111,7 @@ class IterativeAgentExecutor
     }
   end
 
-  def execute_step_tool(tool_name, params)
+  def execute_step_tool(tool_name, _params)
     case tool_name.to_s
     when /search_instrument/
       symbol = extract_symbol_from_prompt
@@ -119,7 +119,7 @@ class IterativeAgentExecutor
     when /get_option_chain/
       # Use previous result (instrument)
       instrument = find_previous_result_of_type(:instrument)
-      return { error: "Instrument not found" } unless instrument
+      return { error: 'Instrument not found' } unless instrument
 
       DhanHQ::Models::OptionChain.fetch(
         underlying_scrip: instrument.security_id.to_s,
@@ -128,7 +128,7 @@ class IterativeAgentExecutor
       )
     when /get_live_quote/
       instrument = find_previous_result_of_type(:instrument)
-      return { error: "Instrument not found" } unless instrument
+      return { error: 'Instrument not found' } unless instrument
 
       DhanHQ::Models::MarketFeed.quote(
         instrument.exchange_segment => [instrument.security_id.to_i]
@@ -144,11 +144,12 @@ class IterativeAgentExecutor
     end
   end
 
-  def find_previous_result_of_type(type)
+  def find_previous_result_of_type(_type)
     # Find instrument from previous results
     @execution_results.reverse_each do |result|
       next unless result[:result]
       next unless result[:result].is_a?(DhanHQ::Models::Instrument)
+
       return result[:result]
     end
     nil
@@ -177,26 +178,18 @@ class IterativeAgentExecutor
       observations << "Found instrument: #{result.symbol_name} (ID: #{result.security_id})"
     end
 
-    if result.is_a?(Hash) && result[:data]
-      observations << "Retrieved data successfully"
-    end
+    observations << 'Retrieved data successfully' if result.is_a?(Hash) && result[:data]
 
-    if result.is_a?(Array)
-      observations << "Retrieved #{result.length} items"
-    end
+    observations << "Retrieved #{result.length} items" if result.is_a?(Array)
 
     observations
   end
 
   def check_completeness(result)
     # Check if we have enough data to complete the request
-    if @prompt.include?('option chain') && result.is_a?(Hash) && result[:data]
-      return true
-    end
+    return true if @prompt.include?('option chain') && result.is_a?(Hash) && result[:data]
 
-    if @prompt.include?('quote') && result.is_a?(Hash) && result[:data]
-      return true
-    end
+    return true if @prompt.include?('quote') && result.is_a?(Hash) && result[:data]
 
     false
   end
@@ -209,12 +202,12 @@ class IterativeAgentExecutor
     # If last step failed, try an alternative approach
     Rails.logger.info "Previous step failed, refining plan... Observations: #{observation[:observations]}"
 
-    if @plan.length > 0 && @execution_results.last
-      failed_step = @execution_results.last[:step]
-      # Try alternative tool for this step
-      alternative_tool = suggest_alternative(failed_step[:tool])
-      @plan[@execution_results.length - 1][:tool] = alternative_tool if alternative_tool
-    end
+    return unless @plan.length.positive? && @execution_results.last
+
+    failed_step = @execution_results.last[:step]
+    # Try alternative tool for this step
+    alternative_tool = suggest_alternative(failed_step[:tool])
+    @plan[@execution_results.length - 1][:tool] = alternative_tool if alternative_tool
   end
 
   def suggest_alternative(tool_name)
@@ -223,8 +216,6 @@ class IterativeAgentExecutor
       'get_instruments_by_segment'
     when /get_option_chain/
       'search_instrument' # Maybe need to find instrument first
-    else
-      nil
     end
   end
 
@@ -232,8 +223,8 @@ class IterativeAgentExecutor
     if @execution_results.empty?
       return {
         type: :error,
-        message: "Failed to execute",
-        formatted: "❌ Could not fulfill request"
+        message: 'Failed to execute',
+        formatted: '❌ Could not fulfill request'
       }
     end
 
@@ -250,12 +241,10 @@ class IterativeAgentExecutor
   end
 
   def format_result(result)
-    if result.is_a?(DhanHQ::Models::Instrument)
-      return format_instrument(result)
-    end
+    return format_instrument(result) if result.is_a?(DhanHQ::Models::Instrument)
 
     if result.is_a?(Hash)
-      if result[:data] && result[:data].is_a?(Hash)
+      if result[:data].is_a?(Hash)
         # Option chain or quote
         return format_option_chain_or_quote(result)
       end
@@ -263,9 +252,7 @@ class IterativeAgentExecutor
       return "<pre>#{JSON.pretty_generate(result)}</pre>"
     end
 
-    if result.is_a?(Array)
-      return "<pre>Found #{result.length} items</pre>"
-    end
+    return "<pre>Found #{result.length} items</pre>" if result.is_a?(Array)
 
     result.to_s
   end
@@ -299,4 +286,3 @@ class IterativeAgentExecutor
     nil
   end
 end
-

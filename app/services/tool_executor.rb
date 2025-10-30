@@ -23,7 +23,7 @@ class ToolExecutor
   def self.workflow_option_chain(symbol)
     # Step 1: Find instrument
     instrument = DhanHQ::Models::Instrument.find_anywhere(symbol, exact_match: true)
-    return { error: "Instrument not found" } unless instrument
+    return { error: 'Instrument not found' } unless instrument
 
     # Step 2: Get option chain
     chain = DhanHQ::Models::OptionChain.fetch(
@@ -41,7 +41,7 @@ class ToolExecutor
   def self.workflow_quote_with_analysis(symbol)
     # Step 1: Find instrument
     instrument = DhanHQ::Models::Instrument.find_anywhere(symbol, exact_match: true)
-    return { error: "Instrument not found" } unless instrument
+    return { error: 'Instrument not found' } unless instrument
 
     # Step 2: Get quote
     quote_response = DhanHQ::Models::MarketFeed.quote(
@@ -55,7 +55,7 @@ class ToolExecutor
       instrument: instrument.instrument,
       interval: '15',
       from_date: 7.days.ago.strftime('%Y-%m-%d'),
-      to_date: Date.today.strftime('%Y-%m-%d')
+      to_date: Time.zone.today.strftime('%Y-%m-%d')
     )
 
     quote_data = quote_response.dig('data', instrument.exchange_segment, instrument.security_id)
@@ -70,7 +70,7 @@ class ToolExecutor
   def self.workflow_place_order_with_risk_check(symbol, quantity, price, transaction_type)
     # Step 1: Find instrument
     instrument = DhanHQ::Models::Instrument.find_anywhere(symbol, exact_match: true)
-    return { error: "Instrument not found" } unless instrument
+    return { error: 'Instrument not found' } unless instrument
 
     # Step 2: Get current quote
     quote_response = DhanHQ::Models::MarketFeed.ltp(
@@ -82,16 +82,14 @@ class ToolExecutor
 
     # Step 4: Validate order
     order_value = quantity * price
-    if order_value > margin.available_amount
-      return { error: "Insufficient margin" }
-    end
+    return { error: 'Insufficient margin' } if order_value > margin.available_amount
 
     # Step 5: Place order
     order = DhanHQ::Models::Order.create(
       transaction_type: transaction_type,
       exchange_segment: instrument.exchange_segment,
       product_type: 'MARGIN',
-      order_type: price > 0 ? 'LIMIT' : 'MARKET',
+      order_type: price.positive? ? 'LIMIT' : 'MARKET',
       security_id: instrument.security_id,
       quantity: quantity,
       price: price,
@@ -106,4 +104,3 @@ class ToolExecutor
     }
   end
 end
-

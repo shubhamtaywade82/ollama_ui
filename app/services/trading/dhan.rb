@@ -5,21 +5,21 @@ module Trading
     class Error < StandardError; end
 
     SEGMENT_KEYS = {
-      "NSE" => "NSE_EQ",
-      "NSE_EQ" => "NSE_EQ",
-      "NSE_FNO" => "NSE_FNO",
-      "BSE" => "BSE_EQ",
-      "MCX" => "MCX",
-      "NSE_CURRENCY" => "NSE_CURRENCY",
-      "BSE_CURRENCY" => "BSE_CURRENCY"
+      'NSE' => 'NSE_EQ',
+      'NSE_EQ' => 'NSE_EQ',
+      'NSE_FNO' => 'NSE_FNO',
+      'BSE' => 'BSE_EQ',
+      'MCX' => 'MCX',
+      'NSE_CURRENCY' => 'NSE_CURRENCY',
+      'BSE_CURRENCY' => 'BSE_CURRENCY'
     }.freeze
 
-    TIME_ZONE = "Asia/Kolkata"
+    TIME_ZONE = 'Asia/Kolkata'
 
     class << self
       # -------- Market Data --------
 
-      def quote(security_id:, segment: "NSE")
+      def quote(security_id:, segment: 'NSE')
         configure_client!
 
         response = market_feed.quote(segment_payload(segment, security_id))
@@ -29,7 +29,7 @@ module Trading
         raise Error, "quote: #{e.message}"
       end
 
-      def ohlc(security_id:, segment: "NSE", interval: "5m", count: 120)
+      def ohlc(security_id:, segment: 'NSE', interval: '5m', count: 120)
         configure_client!
 
         instrument = locate_instrument(security_id, segment)
@@ -41,8 +41,8 @@ module Trading
           exchange_segment: segment_key(segment),
           instrument: instrument.instrument,
           interval: window[:interval_code],
-          from_date: window[:from].strftime("%Y-%m-%d"),
-          to_date: window[:to].strftime("%Y-%m-%d")
+          from_date: window[:from].strftime('%Y-%m-%d'),
+          to_date: window[:to].strftime('%Y-%m-%d')
         }
 
         historical_data.intraday(params)
@@ -50,7 +50,7 @@ module Trading
         raise Error, "ohlc: #{e.message}"
       end
 
-      def historical(security_id:, segment: "NSE", interval: "1d", from:, to:)
+      def historical(security_id:, from:, to:, segment: 'NSE', interval: '1d')
         configure_client!
 
         instrument = locate_instrument(security_id, segment)
@@ -70,7 +70,7 @@ module Trading
         raise Error, "historical: #{e.message}"
       end
 
-      def option_chain(underlying_security_id:, segment: "NSE", expiry:)
+      def option_chain(underlying_security_id:, expiry:, segment: 'NSE')
         configure_client!
 
         payload = {
@@ -95,7 +95,7 @@ module Trading
       # -------- Orders (incl. Bracket) --------
 
       def place_order(**params)
-        return Trading::PaperAdapter.place_order(**params.merge(mode: :simple)) unless live?
+        return Trading::PaperAdapter.place_order(**params, mode: :simple) unless live?
 
         configure_client!
         orders_resource.create(params)
@@ -104,7 +104,7 @@ module Trading
       end
 
       def place_bracket(**params)
-        return Trading::PaperAdapter.place_order(**params.merge(mode: :bracket)) unless live?
+        return Trading::PaperAdapter.place_order(**params, mode: :bracket) unless live?
 
         configure_client!
         super_orders_resource.create(params)
@@ -138,7 +138,7 @@ module Trading
       end
 
       def live?
-        ActiveModel::Type::Boolean.new.cast(ENV.fetch("LIVE_TRADING", "false"))
+        ActiveModel::Type::Boolean.new.cast(ENV.fetch('LIVE_TRADING', 'false'))
       end
 
       private
@@ -146,13 +146,13 @@ module Trading
       def configure_client!
         return if defined?(@configured) && @configured
 
-        client_id = env_fetch!("DHAN_CLIENT_ID")
-        access_token = env_fetch!("DHAN_ACCESS_TOKEN")
+        client_id = env_fetch!('DHAN_CLIENT_ID')
+        access_token = env_fetch!('DHAN_ACCESS_TOKEN')
 
         DhanHQ.configure do |config|
           config.client_id = client_id
           config.access_token = access_token
-          base_override = ENV.fetch("DHAN_BASE_URL", nil)
+          base_override = ENV.fetch('DHAN_BASE_URL', nil)
           config.base_url = base_override if base_override.present?
         end
 
@@ -188,9 +188,9 @@ module Trading
       end
 
       def interval_code(interval)
-        return interval.to_s if interval =~ /\A\d+\z/
+        return interval.to_s if /\A\d+\z/.match?(interval)
 
-        interval.to_s.delete_suffix("m")
+        interval.to_s.delete_suffix('m')
       end
 
       def normalized_interval(interval)
