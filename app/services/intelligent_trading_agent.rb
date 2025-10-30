@@ -102,6 +102,17 @@ class IntelligentTradingAgent
   def plan_next_step
     Rails.logger.info "PLANNING: Step #{@current_step_index + 1}"
 
+    # If reasoning failed (e.g., LLM unreachable), fall back to a deterministic plan
+    if @reasoning.nil?
+      Rails.logger.warn "⚠️ No reasoning available; using fallback plan"
+      @plan = generate_fallback_plan
+      # Ensure IDs and params are prepared just like the normal path
+      @plan.each_with_index { |step, idx| step[:id] = idx }
+      enrich_plan_with_params
+      Rails.logger.info "📋 Plan created (fallback): #{@plan.map { |s| "#{s[:id]}-#{s[:tool]}" }.join(' → ')}"
+      return
+    end
+
     current_goal = @reasoning[:goal] || @prompt
     required_tools = @reasoning[:required_tools] || []
 
@@ -724,90 +735,16 @@ class IntelligentTradingAgent
     inst = @context[:instrument]
     expiry = params[:expiry]
 
-    # For indices, option chains are in NSE_FNO segment, not IDX_I
-    # IDX_I is only for index quotes/prices
-    option_segment = if inst.exchange_segment.to_s == 'IDX_I' || inst.instrument.to_s == 'INDEX'
-                       'NSE_FNO'
-                     else
-                       inst.exchange_segment.to_s
-                     end
-
-    # For indices, we need to find the underlying in NSE_FNO segment
-    # Option chains need the underlying instrument in FNO segment, not the index quote in IDX_I
-    underlying_security_id = inst.security_id
-    if inst.exchange_segment.to_s == 'IDX_I' || inst.instrument.to_s == 'INDEX'
-      Rails.logger.info "📌 Index detected (#{inst.symbol_name}), searching for underlying in NSE_FNO segment"
-      begin
-        # Try to find the same symbol in NSE_FNO (for options)
-        fno_instrument = DhanHQ::Models::Instrument.find('NSE_FNO', inst.symbol_name.upcase)
-        if fno_instrument
-          underlying_security_id = fno_instrument.security_id
-          Rails.logger.info "✅ Found underlying in NSE_FNO: #{fno_instrument.symbol_name} (ID: #{underlying_security_id})"
-        else
-          # Try with common index option names
-          index_names = {
-            'NIFTY' => 'NIFTY 50',
-            'BANKNIFTY' => 'BANKNIFTY',
-            'FINNIFTY' => 'FINNIFTY',
-            'SENSEX' => 'SENSEX'
-          }
-          search_name = index_names[inst.symbol_name.upcase] || inst.symbol_name
-          fno_instrument = DhanHQ::Models::Instrument.find('NSE_FNO', search_name.upcase)
-          if fno_instrument
-            underlying_security_id = fno_instrument.security_id
-            Rails.logger.info "✅ Found underlying in NSE_FNO: #{fno_instrument.symbol_name} (ID: #{underlying_security_id})"
-          else
-            Rails.logger.warn "⚠️ Could not find underlying in NSE_FNO, using index ID: #{underlying_security_id}"
-          end
-        end
-      rescue StandardError => e
-        Rails.logger.warn "⚠️ Error finding underlying in NSE_FNO: #{e.message}, using index ID: #{underlying_security_id}"
-      end
-    end
-
-    # For option chain, we need to use the correct instrument
-    # If we found a FNO instrument, use it; otherwise try to use the original
+    # Keep the instrument's own segment (IDX_I for indices) and use gem convenience methods
     option_instrument = inst
-    if inst.exchange_segment.to_s == 'IDX_I' || inst.instrument.to_s == 'INDEX'
-      # Try to find/create an instrument for the FNO underlying
-      begin
-        if underlying_security_id != inst.security_id
-          # We found a different security_id, need to find or construct instrument
-          # For now, we'll need to manually call the API with the correct params
-          # But first, let's see if we can use the convenience method by finding the FNO instrument
-          fno_instrument = DhanHQ::Models::Instrument.find('NSE_FNO', inst.symbol_name.upcase) ||
-                          (index_names = { 'NIFTY' => 'NIFTY 50', 'BANKNIFTY' => 'BANKNIFTY', 'FINNIFTY' => 'FINNIFTY' };
-                          search_name = index_names[inst.symbol_name.upcase] || inst.symbol_name;
-                          DhanHQ::Models::Instrument.find('NSE_FNO', search_name.upcase))
-          option_instrument = fno_instrument if fno_instrument
-        end
-      rescue StandardError => e
-        Rails.logger.debug "Could not find FNO instrument: #{e.message}"
-      end
-    end
 
     # If no expiry specified, get the expiry list from DhanHQ and use the first one
     unless expiry
       Rails.logger.info "📅 No expiry specified, fetching expiry list for #{inst.symbol_name}"
 
       begin
-        # Use convenience method if we have the right instrument, otherwise call API directly
-        expiry_list = if option_instrument && option_instrument.exchange_segment.to_s != 'IDX_I'
-                        option_instrument.expiry_list
-                      else
-                        # Fall back to manual API call for indices
-                        response = DhanHQ::Models::OptionChain.fetch_expiry_list(
-                          underlying_scrip: underlying_security_id.to_i,
-                          underlying_seg: option_segment
-                        )
-                        if response.is_a?(Hash)
-                          response[:data] || response['data'] || []
-                        elsif response.is_a?(Array)
-                          response
-                        else
-                          []
-                        end
-                      end
+        # Always prefer the gem's convenience method on the instrument
+        expiry_list = option_instrument.expiry_list
 
         if expiry_list.is_a?(Array) && expiry_list.length > 0
           expiry = expiry_list.first.to_s
@@ -829,19 +766,10 @@ class IntelligentTradingAgent
       end
     end
 
-    Rails.logger.info "🔗 Fetching option chain for #{inst.symbol_name} (expiry: #{expiry}, segment: #{option_segment}, security_id: #{underlying_security_id})"
+    Rails.logger.info "🔗 Fetching option chain for #{inst.symbol_name} (expiry: #{expiry}, segment: #{option_instrument.exchange_segment}, security_id: #{option_instrument.security_id})"
 
-    # Use convenience method if we have the right instrument, otherwise call API directly
-    option_chain_result = if option_instrument && option_instrument.exchange_segment.to_s != 'IDX_I'
-                            option_instrument.option_chain(expiry: expiry)
-                          else
-                            # Fall back to manual API call for indices
-                            DhanHQ::Models::OptionChain.fetch(
-                              underlying_scrip: underlying_security_id.to_s,
-                              underlying_seg: option_segment,
-                              expiry: expiry
-                            )
-                          end
+    # Use the instrument convenience method so the gem handles segment/id correctly
+    option_chain_result = option_instrument.option_chain(expiry: expiry)
 
     {
       instrument: inst,
