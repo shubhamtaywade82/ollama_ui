@@ -201,7 +201,8 @@ class DhanTradingAgent
     end
 
     # Check if this needs a workflow (multi-step)
-    if tool_name.to_s.include?('option_chain') || @user_prompt.include?('option')
+    # Treat "contracts" as alias for option-chain requests
+    if tool_name.to_s.include?('option_chain') || @user_prompt.match?(/\b(option|contracts?)\b/i)
       result = execute_workflow(:option_chain, params)
     elsif tool_name.to_s.include?('place_order') || @user_prompt.match?(/buy|sell|order/i)
       result = execute_workflow(:place_order_with_risk_check, params)
@@ -251,6 +252,9 @@ class DhanTradingAgent
         elsif tool_name.to_s.include?('historical') || tool_name.to_s.include?('intraday') || tool_name.to_s.include?('daily') || tool_name.to_s.include?('ohlc') || tool_name.to_s.include?('candle')
           symbol = normalize_symbol(params[:symbol]) || extract_symbol_from_prompt
           get_historical_data(symbol, params[:timeframe], params[:interval])
+        elsif tool_name.to_s.include?('option') || @user_prompt.match?(/\b(contracts?|option)\b/i)
+          symbol = normalize_symbol(params[:symbol]) || extract_symbol_from_prompt
+          execute_workflow(:option_chain, { symbol: symbol }.merge(params.reject { |k| k == :symbol }))
         else
           {
             type: :error,
@@ -290,10 +294,56 @@ class DhanTradingAgent
     instrument = DhanHQ::Models::Instrument.find_anywhere(symbol, exact_match: true)
     return error_response("Symbol #{symbol} not found") unless instrument
 
+    # Determine expiry: use provided, else fetch list and pick the nearest
+    expiry = params[:expiry]
+    unless expiry
+      begin
+        expiries = instrument.expiry_list
+        if expiries.is_a?(Array) && expiries.any?
+          expiry = expiries.first.to_s
+        else
+          # Fallback to next Thursday
+          d = Date.today
+          d += 1 until d.thursday?
+          expiry = d.strftime('%Y-%m-%d')
+        end
+      rescue StandardError => e
+        # Fallback if expiry list fails
+        d = Date.today
+        d += 1 until d.thursday?
+        expiry = d.strftime('%Y-%m-%d')
+      end
+    end
+
+    # Map underlying segment correctly
+    base_seg = instrument.exchange_segment.to_s
+    inst_type = instrument.instrument.to_s
+    target_seg = if base_seg == 'IDX_I' || inst_type == 'INDEX'
+                   'IDX_I'
+                 elsif base_seg.start_with?('NSE')
+                   'NSE_FNO'
+                 elsif base_seg.start_with?('BSE')
+                   'BSE_FNO'
+                 else
+                   base_seg
+                 end
+
+    # Resolve underlying security_id in the target segment (for stocks moving from EQ -> FNO)
+    underlying_sid = instrument.security_id
+    if target_seg != base_seg
+      begin
+        fno_inst = DhanHQ::Models::Instrument.find(target_seg, instrument.symbol_name.to_s.upcase)
+        underlying_sid = fno_inst.security_id if fno_inst
+      rescue StandardError
+        # fallback to original sid
+      end
+    end
+
+    # Fetch option chain via API with explicit segment mapping
     chain = DhanHQ::Models::OptionChain.fetch(
-      underlying_scrip: instrument.security_id.to_s,
-      underlying_seg: instrument.exchange_segment,
-      expiry: nil
+      underlying_scrip: underlying_sid.to_s,
+      underlying_seg: target_seg,
+      expiry: expiry
     )
 
     {
@@ -394,14 +444,105 @@ class DhanTradingAgent
   def format_option_chain(chain_data)
     return 'No option chain data available' unless chain_data
 
-    # Format option chain display
-    calls = chain_data[:data]&.dig(:calls) || []
-    puts = chain_data[:data]&.dig(:puts) || []
+    # Normalize shape (top-level or nested under :data)
+    data_node = chain_data[:data] || chain_data['data'] || {}
+    spot_ltp = chain_data[:last_price] || chain_data['last_price'] || data_node[:last_price] || data_node['last_price']
+    oc = chain_data[:oc] || chain_data['oc'] || data_node[:oc] || data_node['oc'] || {}
 
     html = "<div class='bg-gradient-to-r from-blue-50 to-purple-50 p-4 rounded-lg'>"
     html += "<h3 class='font-bold text-lg mb-3'>📊 Option Chain</h3>"
-    html += "<p class='text-sm text-gray-600'>Calls: #{calls.length}, Puts: #{puts.length}</p>"
-    html += "<pre class='text-xs mt-2 overflow-auto max-h-64'>#{JSON.pretty_generate(chain_data)}</pre>"
+
+    unless oc.is_a?(Hash) && oc.any?
+      html += "<pre class='text-xs mt-2 overflow-auto max-h-96'>#{JSON.pretty_generate(chain_data)}</pre>"
+      html += '</div>'
+      return html
+    end
+
+    # Build ATM-centered, 10-strike window
+    strikes = oc.keys.map { |k| k.to_s.to_f }.sort
+    atm = if spot_ltp
+            strikes.min_by { |s| (s - spot_ltp.to_f).abs }
+          else
+            strikes[strikes.length / 2]
+          end
+    window = 10
+    ai = strikes.index(atm) || 0
+    start_i = [ai - (window / 2), 0].max
+    end_i = [start_i + window - 1, strikes.length - 1].min
+    start_i = [end_i - (window - 1), 0].max
+    view = strikes[start_i..end_i]
+
+    html += "<div class='text-xs text-gray-700 mb-2'><span class='font-medium'>Spot (LTP):</span> #{spot_ltp} <span class='ml-2 text-gray-500'>ATM:</span> #{atm}</div>"
+    html += <<~HTML
+      <div class="overflow-x-auto">
+        <table class="w-full text-xs">
+          <thead>
+            <tr class="border-b">
+              <th class="text-right p-1 w-20">CE LTP</th>
+              <th class="text-right p-1 w-16">CE OI</th>
+              <th class="text-right p-1 w-14">CE IV</th>
+              <th class="text-right p-1 w-24">CE Bid/Ask</th>
+              <th class="text-center p-1 w-20">Strike</th>
+              <th class="text-right p-1 w-24">PE Bid/Ask</th>
+              <th class="text-right p-1 w-14">PE IV</th>
+              <th class="text-right p-1 w-16">PE OI</th>
+              <th class="text-right p-1 w-20">PE LTP</th>
+            </tr>
+          </thead>
+          <tbody>
+    HTML
+
+    fmt_bucket = lambda do |hash, strike|
+      return hash[strike.to_s] if hash.key?(strike.to_s)
+      k6 = format('%.6f', strike)
+      return hash[k6] if hash.key?(k6)
+      k = hash.keys.find { |kk| kk.to_s.to_f == strike }
+      k ? hash[k] : nil
+    end
+
+    view.each do |s|
+      data = fmt_bucket.call(oc, s)
+      ce = (data && (data[:ce] || data['ce'])) || {}
+      pe = (data && (data[:pe] || data['pe'])) || {}
+
+      ce_iv = (ce[:implied_volatility] || ce['implied_volatility']).to_f
+      pe_iv = (pe[:implied_volatility] || pe['implied_volatility']).to_f
+      ce_ltp = (ce[:last_price] || ce['last_price']).to_f
+      pe_ltp = (pe[:last_price] || pe['last_price']).to_f
+      ce_oi  = (ce[:oi] || ce['oi']).to_i
+      pe_oi  = (pe[:oi] || pe['oi']).to_i
+      ce_bid = (ce[:top_bid_price] || ce['top_bid_price'] || ce[:best_bid_price] || ce['best_bid_price'])
+      ce_ask = (ce[:top_ask_price] || ce['top_ask_price'] || ce[:best_ask_price] || ce['best_ask_price'])
+      pe_bid = (pe[:top_bid_price] || pe['top_bid_price'] || pe[:best_bid_price] || pe['best_bid_price'])
+      pe_ask = (pe[:top_ask_price] || pe['top_ask_price'] || pe[:best_ask_price] || pe['best_ask_price'])
+
+      is_atm = (s.to_f.round(2) == atm.to_f.round(2))
+      row_class = is_atm ? 'bg-yellow-50' : ''
+      row_style = is_atm ? 'style="background: rgba(250,204,21,0.25); font-weight:600;"' : ''
+      strike_label = is_atm ? "<span class=\"ml-1 text-[10px] px-1 py-0.5 rounded bg-yellow-200 text-yellow-900 align-middle\">ATM</span>" : ''
+
+      html += <<~HTML
+        <tr class="border-b #{row_class}" #{row_style}>
+          <td class="text-right p-1">#{ce_ltp > 0 ? ce_ltp.round(2) : '-'}</td>
+          <td class="text-right p-1">#{ce_oi > 0 ? ce_oi.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse : '-'}</td>
+          <td class="text-right p-1">#{ce_iv > 0 ? ce_iv.round(2) : '-'}</td>
+          <td class="text-right p-1">#{ce_bid ? ce_bid.to_f.round(2) : '-'} / #{ce_ask ? ce_ask.to_f.round(2) : '-'}</td>
+          <td class="text-center p-1 font-semibold">#{s.to_i} #{strike_label}</td>
+          <td class="text-right p-1">#{pe_bid ? pe_bid.to_f.round(2) : '-'} / #{pe_ask ? pe_ask.to_f.round(2) : '-'}</td>
+          <td class="text-right p-1">#{pe_iv > 0 ? pe_iv.round(2) : '-'}</td>
+          <td class="text-right p-1">#{pe_oi > 0 ? pe_oi.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse : '-'}</td>
+          <td class="text-right p-1">#{pe_ltp > 0 ? pe_ltp.round(2) : '-'}</td>
+        </tr>
+      HTML
+    end
+
+    html += <<~HTML
+          </tbody>
+        </table>
+        <p class="text-xs text-gray-500 mt-2">Showing #{view.length} strikes around ATM</p>
+      </div>
+    HTML
+
     html += '</div>'
     html
   end
@@ -575,6 +716,8 @@ class DhanTradingAgent
       :historical_data
     when /search|find|instrument/i
       :instrument_search
+    when /option|contract/i
+      :option_chain
     else
       :unknown
     end
@@ -597,12 +740,18 @@ class DhanTradingAgent
   private
 
   def command_type
-    return :account_balance if @user_prompt.match?(/\b(balance|account|cash|equity|funds)\b/)
-    return :positions if @user_prompt.match?(/\b(position|open position)\b/)
-    return :holdings if @user_prompt.match?(/\b(holding|portfolio|investments)\b/)
-    return :quote if @user_prompt.match?(/\b(quote|price|ltp|last price|current price)/)
-    return :historical_data if @user_prompt.match?(/\b(historical|ohlc|candle|chart)\b/)
-    return :instrument_search if @user_prompt.match?(/\b(find|search|lookup)\b/)
+    # Account & Portfolio
+    return :account_balance if @user_prompt.match?(/\b(balance|account|cash|equity|funds|margin|buying power)\b/i)
+    return :positions if @user_prompt.match?(/\b(positions?|open positions?)\b/i)
+    return :holdings if @user_prompt.match?(/\b(holdings?|portfolio|demat|investments?)\b/i)
+
+    # Market data
+    return :quote if @user_prompt.match?(/\b(quote|ltp|price|last price|current price)\b/i)
+    return :historical_data if @user_prompt.match?(/\b(historical|history|ohlc|candles?|chart|bars?|klines?)\b/i)
+    return :option_chain if @user_prompt.match?(/\b(option|contracts?)\b/i)
+
+    # Discovery
+    return :instrument_search if @user_prompt.match?(/\b(find|search|lookup)\b/i)
 
     :unknown
   end

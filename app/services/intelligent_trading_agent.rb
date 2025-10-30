@@ -1172,24 +1172,106 @@ class IntelligentTradingAgent
         <p class="text-sm text-gray-600 mb-3">Expiry: #{expiry}</p>
     HTML
 
-    if chain_data.is_a?(Hash) && chain_data[:data]
-      # Format option chain OC data
-      oc = chain_data[:data][:oc] || chain_data[:data]['oc'] || {}
-      if oc.is_a?(Hash)
-        # Show first few strikes
-        strikes = oc.keys.first(5)
+    if chain_data.is_a?(Hash)
+      # Support both shapes: top-level keys (last_price, oc) or nested under :data
+      data_node = chain_data[:data] || chain_data['data'] || {}
+      spot_ltp = chain_data[:last_price] || chain_data['last_price'] || data_node[:last_price] || data_node['last_price']
+      oc = chain_data[:oc] || chain_data['oc'] || data_node[:oc] || data_node['oc'] || {}
+
+      if oc.is_a?(Hash) && oc.any?
+        # Normalize strikes to numbers
+        strike_floats = oc.keys.map { |k| k.to_s.to_f }.sort
+        # Find ATM strike closest to spot
+        atm_strike = if spot_ltp
+                        strike_floats.min_by { |s| (s - spot_ltp.to_f).abs }
+                      else
+                        strike_floats[strike_floats.length / 2]
+                      end
+        # Window around ATM (e.g., 10 strikes total)
+        window = 10
+        atm_index = strike_floats.index(atm_strike) || 0
+        start_i = [atm_index - (window / 2), 0].max
+        end_i = [start_i + window - 1, strike_floats.length - 1].min
+        start_i = [end_i - (window - 1), 0].max
+        view_strikes = strike_floats[start_i..end_i]
 
         html += <<~HTML
+          <div class="text-xs text-gray-700 mb-2">
+            <span class="font-medium">Spot (LTP):</span> #{spot_ltp}
+            <span class="ml-2 text-gray-500">ATM:</span> #{atm_strike}
+          </div>
           <div class="overflow-x-auto">
-            <p class="text-xs text-gray-500">Showing first 5 strikes of available option chain data</p>
-            <pre class="text-xs mt-2 overflow-auto max-h-96 bg-gray-100 p-3 rounded">#{JSON.pretty_generate(oc.slice(*strikes))}</pre>
+            <table class="w-full text-xs">
+              <thead>
+                <tr class="border-b">
+                  <th class="text-right p-1 w-20">CE LTP</th>
+                  <th class="text-right p-1 w-16">CE OI</th>
+                  <th class="text-right p-1 w-14">CE IV</th>
+                  <th class="text-right p-1 w-24">CE Bid/Ask</th>
+                  <th class="text-center p-1 w-20">Strike</th>
+                  <th class="text-right p-1 w-24">PE Bid/Ask</th>
+                  <th class="text-right p-1 w-14">PE IV</th>
+                  <th class="text-right p-1 w-16">PE OI</th>
+                  <th class="text-right p-1 w-20">PE LTP</th>
+                </tr>
+              </thead>
+              <tbody>
+        HTML
+
+        # Helper to fetch strike bucket regardless of key formatting
+        fetch_bucket = lambda do |hash, strike|
+          return hash[strike.to_s] if hash.key?(strike.to_s)
+          key6 = format('%.6f', strike.to_f)
+          return hash[key6] if hash.key?(key6)
+          # Fallback: numeric match
+          k = hash.keys.find { |kk| kk.to_s.to_f == strike.to_f }
+          k ? hash[k] : nil
+        end
+
+        view_strikes.each do |s|
+          data = fetch_bucket.call(oc, s)
+          ce = (data && (data[:ce] || data['ce'])) || {}
+          pe = (data && (data[:pe] || data['pe'])) || {}
+
+          ce_iv = (ce[:implied_volatility] || ce['implied_volatility']).to_f
+          pe_iv = (pe[:implied_volatility] || pe['implied_volatility']).to_f
+          ce_ltp = (ce[:last_price] || ce['last_price']).to_f
+          pe_ltp = (pe[:last_price] || pe['last_price']).to_f
+          ce_oi  = (ce[:oi] || ce['oi']).to_i
+          pe_oi  = (pe[:oi] || pe['oi']).to_i
+          ce_bid = (ce[:top_bid_price] || ce['top_bid_price'] || ce[:best_bid_price] || ce['best_bid_price'])
+          ce_ask = (ce[:top_ask_price] || ce['top_ask_price'] || ce[:best_ask_price] || ce['best_ask_price'])
+          pe_bid = (pe[:top_bid_price] || pe['top_bid_price'] || pe[:best_bid_price] || pe['best_bid_price'])
+          pe_ask = (pe[:top_ask_price] || pe['top_ask_price'] || pe[:best_ask_price] || pe['best_ask_price'])
+
+          row_class = s == atm_strike ? 'bg-yellow-50' : ''
+
+          html += <<~HTML
+            <tr class="border-b #{row_class}">
+              <td class="text-right p-1">#{ce_ltp > 0 ? ce_ltp.round(2) : '-'}</td>
+              <td class="text-right p-1">#{ce_oi > 0 ? ce_oi.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse : '-'}</td>
+              <td class="text-right p-1">#{ce_iv > 0 ? ce_iv.round(2) : '-'}</td>
+              <td class="text-right p-1">#{ce_bid ? ce_bid.to_f.round(2) : '-'} / #{ce_ask ? ce_ask.to_f.round(2) : '-'}</td>
+              <td class="text-center p-1 font-semibold">#{s.to_i}</td>
+              <td class="text-right p-1">#{pe_bid ? pe_bid.to_f.round(2) : '-'} / #{pe_ask ? pe_ask.to_f.round(2) : '-'}</td>
+              <td class="text-right p-1">#{pe_iv > 0 ? pe_iv.round(2) : '-'}</td>
+              <td class="text-right p-1">#{pe_oi > 0 ? pe_oi.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse : '-'}</td>
+              <td class="text-right p-1">#{pe_ltp > 0 ? pe_ltp.round(2) : '-'}</td>
+            </tr>
+          HTML
+        end
+
+        html += <<~HTML
+              </tbody>
+            </table>
+            <p class="text-xs text-gray-500 mt-2">Showing #{view_strikes.length} strikes around ATM</p>
           </div>
         HTML
       else
-        html += "<p class='text-sm'>Option chain data received</p>"
+        html += "<p class='text-sm'>No option chain strikes available</p>"
       end
     else
-      html += "<pre class='text-xs overflow-auto max-h-96'>#{JSON.pretty_generate(chain_data)}</pre>"
+      html += "<p class='text-sm'>Invalid option chain data</p>"
     end
 
     html += "</div>"
