@@ -1,9 +1,9 @@
 GIT
   remote: https://github.com/shubhamtaywade82/dhanhq-client.git
-  revision: c79feabb14aa693516084e52725ad474794f55fb
+  revision: cfcf20cfd718d7adafa0e0b4d86f3d90dd409a43
   branch: main
   specs:
-    DhanHQ (2.1.8)
+    DhanHQ (2.1.10)
       activesupport
       base64
       bindata
@@ -254,7 +254,7 @@ GEM
       net-smtp
     marcel (1.1.0)
     mini_mime (1.1.5)
-    minitest (5.26.0)
+    minitest (5.26.1)
     msgpack (1.8.0)
     multipart-post (2.4.1)
     net-imap (0.5.12)
@@ -440,7 +440,7 @@ GEM
     unicode-display_width (3.2.0)
       unicode-emoji (~> 4.1)
     unicode-emoji (4.1.0)
-    uri (1.0.4)
+    uri (1.1.1)
     useragent (0.16.11)
     web-console (4.2.1)
       actionview (>= 6.0.0)
