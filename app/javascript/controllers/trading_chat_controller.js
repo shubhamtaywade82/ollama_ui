@@ -9,8 +9,11 @@ marked.setOptions({
 
 export default class extends Controller {
   static targets = [
+    "model",
     "prompt",
+    "promptCentered",
     "sendBtn",
+    "sendBtnCentered",
     "messages",
     "messagesContainer",
     "accountInfo",
@@ -23,6 +26,12 @@ export default class extends Controller {
     "progressLog",
     "sidebarOverlay",
     "progressBadge",
+    "welcomeScreen",
+    "bottomInput",
+    "progressToggleBtn",
+    "expandProgressBtn",
+    "loading",
+    "modelName",
   ];
 
   connect() {
@@ -32,10 +41,13 @@ export default class extends Controller {
     this.cable = null; // ActionCable consumer
     this.channel = null; // Current channel subscription
     this.sidebarOpen = false;
-    this.progressSidebarOpen = false;
+    this.progressSidebarOpen = true; // Expanded by default
+    this.hasMessages = false;
     this.loadAccountInfo();
+    this.loadModels();
     this.setupTextareaEnterHandler();
     this.setupTextareaAutoResize();
+    this.setupCenteredTextareaAutoResize();
     this.updateModeButtons();
     this.initializeProgressSidebar();
     this.setupResponsiveHandlers();
@@ -84,12 +96,27 @@ export default class extends Controller {
     this.progressSidebarOpen = true;
     const sidebar = this.progressSidebarTarget;
 
-    sidebar.classList.remove("translate-x-full");
-    sidebar.classList.add("translate-x-0");
+    // Remove collapse classes
+    sidebar.classList.remove(
+      "-translate-x-full",
+      "w-0",
+      "overflow-hidden",
+      "border-0"
+    );
+    sidebar.classList.add("w-72");
 
-    // Hide badge when sidebar is open
-    if (this.hasProgressBadgeTarget) {
-      this.progressBadgeTarget.classList.add("hidden");
+    // Hide floating expand button
+    if (this.hasExpandProgressBtnTarget) {
+      this.expandProgressBtnTarget.classList.add("hidden");
+    }
+
+    // Update button icon to show collapse (left arrow pointing left)
+    if (this.hasProgressToggleBtnTarget) {
+      const svg = this.progressToggleBtnTarget.querySelector("svg");
+      if (svg) {
+        svg.innerHTML =
+          '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7"/>';
+      }
     }
   }
 
@@ -103,8 +130,28 @@ export default class extends Controller {
     this.progressSidebarOpen = false;
     const sidebar = this.progressSidebarTarget;
 
-    sidebar.classList.remove("translate-x-0");
-    sidebar.classList.add("translate-x-full");
+    // Collapse to left (-translate-x-full moves it off-screen to the left)
+    sidebar.classList.remove("w-72");
+    sidebar.classList.add(
+      "-translate-x-full",
+      "w-0",
+      "overflow-hidden",
+      "border-0"
+    );
+
+    // Show floating expand button
+    if (this.hasExpandProgressBtnTarget) {
+      this.expandProgressBtnTarget.classList.remove("hidden");
+    }
+
+    // Update button icon to show expand (right arrow pointing right)
+    if (this.hasProgressToggleBtnTarget) {
+      const svg = this.progressToggleBtnTarget.querySelector("svg");
+      if (svg) {
+        svg.innerHTML =
+          '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"/>';
+      }
+    }
   }
 
   // Legacy methods for mobile (kept for compatibility)
@@ -142,20 +189,23 @@ export default class extends Controller {
     ) {
       if (this.agentMode === "technical_analysis") {
         // Analysis is active
-        this.technicalAnalysisModeBtnTarget.style.backgroundColor = "var(--accent-primary)";
+        this.technicalAnalysisModeBtnTarget.style.backgroundColor =
+          "var(--accent-primary)";
         this.technicalAnalysisModeBtnTarget.style.color = "white";
         this.technicalAnalysisModeBtnTarget.classList.remove("opacity-60");
-        
+
         this.tradingModeBtnTarget.style.backgroundColor = "var(--bg-tertiary)";
         this.tradingModeBtnTarget.style.color = "var(--text-primary)";
         this.tradingModeBtnTarget.classList.add("opacity-60");
       } else {
         // Trading is active
-        this.tradingModeBtnTarget.style.backgroundColor = "var(--accent-primary)";
+        this.tradingModeBtnTarget.style.backgroundColor =
+          "var(--accent-primary)";
         this.tradingModeBtnTarget.style.color = "white";
         this.tradingModeBtnTarget.classList.remove("opacity-60");
-        
-        this.technicalAnalysisModeBtnTarget.style.backgroundColor = "var(--bg-tertiary)";
+
+        this.technicalAnalysisModeBtnTarget.style.backgroundColor =
+          "var(--bg-tertiary)";
         this.technicalAnalysisModeBtnTarget.style.color = "var(--text-primary)";
         this.technicalAnalysisModeBtnTarget.classList.add("opacity-60");
       }
@@ -164,41 +214,67 @@ export default class extends Controller {
 
   setupTextareaEnterHandler() {
     // Handle Enter key - submit, Shift+Enter for new line
-    this.promptTarget.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        // Find the form and trigger submit
-        const form = this.element.querySelector("form");
-        if (form) {
-          form.dispatchEvent(
-            new Event("submit", { bubbles: true, cancelable: true })
-          );
+    const setupHandler = (textarea) => {
+      if (!textarea) return;
+      textarea.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          // Find the closest form and trigger submit
+          const form = textarea.closest("form");
+          if (form) {
+            form.dispatchEvent(
+              new Event("submit", { bubbles: true, cancelable: true })
+            );
+          }
         }
-      }
-    });
+      });
+    };
+
+    // Setup for both textareas
+    if (this.hasPromptTarget) {
+      setupHandler(this.promptTarget);
+    }
+    if (this.hasPromptCenteredTarget) {
+      setupHandler(this.promptCenteredTarget);
+    }
   }
 
   setupTextareaAutoResize() {
+    if (!this.hasPromptTarget) return;
+
     const textarea = this.promptTarget;
 
     // Initial resize
-    this.resizeTextarea();
+    this.resizeTextarea(textarea);
 
     // Auto-resize on input
     textarea.addEventListener("input", () => {
-      this.resizeTextarea();
+      this.resizeTextarea(textarea);
     });
   }
 
-  resizeTextarea() {
-    const textarea = this.promptTarget;
+  setupCenteredTextareaAutoResize() {
+    if (!this.hasPromptCenteredTarget) return;
+
+    const textarea = this.promptCenteredTarget;
+
+    // Initial resize
+    this.resizeTextarea(textarea, 24, 192); // min 24px, max 192px
+
+    // Auto-resize on input
+    textarea.addEventListener("input", () => {
+      this.resizeTextarea(textarea, 24, 192);
+    });
+  }
+
+  resizeTextarea(textarea, minHeight = 32, maxHeight = 128) {
+    if (!textarea) return;
+
     // Reset height to auto to get the correct scrollHeight
     textarea.style.height = "auto";
 
     // Calculate the new height based on scrollHeight
     const scrollHeight = textarea.scrollHeight;
-    const minHeight = 48; // 3rem = 48px
-    const maxHeight = 192; // 12rem = 192px
 
     // Set the height, but limit to max-height
     const newHeight = Math.min(Math.max(scrollHeight, minHeight), maxHeight);
@@ -209,6 +285,58 @@ export default class extends Controller {
       textarea.style.overflowY = "auto";
     } else {
       textarea.style.overflowY = "hidden";
+    }
+  }
+
+  async loadModels() {
+    if (!this.hasModelTarget) return;
+
+    this.modelTarget.innerHTML = "";
+    if (this.hasLoadingTarget) {
+      this.loadingTarget.classList.remove("hidden");
+    }
+
+    try {
+      const res = await fetch("/models");
+      const json = await res.json();
+      if (json.error) throw new Error(json.error);
+
+      if (json.models.length === 0) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent =
+          "No models installed - Install one with: ollama pull llama3.1:8b";
+        opt.disabled = true;
+        this.modelTarget.appendChild(opt);
+      } else {
+        json.models.forEach((m) => {
+          const opt = document.createElement("option");
+          opt.value = m;
+          opt.textContent = m;
+          this.modelTarget.appendChild(opt);
+        });
+
+        // Set default to qwen model or first available
+        const qwenModel =
+          json.models.find((m) => m.includes("qwen")) || json.models[0];
+        this.modelTarget.value = qwenModel;
+
+        // Update model name display
+        if (this.hasModelNameTarget) {
+          this.modelNameTarget.textContent = `${qwenModel} • Ready`;
+        }
+      }
+    } catch (e) {
+      console.error(e);
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = `Error: ${e.message}`;
+      opt.disabled = true;
+      this.modelTarget.appendChild(opt);
+    } finally {
+      if (this.hasLoadingTarget) {
+        this.loadingTarget.classList.add("hidden");
+      }
     }
   }
 
@@ -237,12 +365,63 @@ export default class extends Controller {
     }
   }
 
+  useExample(event) {
+    event.preventDefault();
+    const example = event.currentTarget.dataset.example;
+    if (example) {
+      // Use centered prompt if welcome screen is visible, otherwise use bottom prompt
+      const prompt =
+        this.hasPromptCenteredTarget && !this.hasMessages
+          ? this.promptCenteredTarget
+          : this.promptTarget;
+
+      if (prompt) {
+        prompt.value = example;
+        prompt.focus();
+        this.resizeTextarea(
+          prompt,
+          prompt === this.promptCenteredTarget ? 24 : 32
+        );
+        // Auto-submit the example
+        const form = prompt.closest("form");
+        if (form) {
+          form.dispatchEvent(
+            new Event("submit", { bubbles: true, cancelable: true })
+          );
+        }
+      }
+    }
+  }
+
   async submit(event) {
     event.preventDefault();
+
+    // Get prompt from the appropriate textarea
+    this.currentPromptTextarea =
+      this.hasPromptCenteredTarget && !this.hasMessages
+        ? this.promptCenteredTarget
+        : this.promptTarget;
+
+    if (!this.currentPromptTextarea) return;
+
+    // Hide welcome screen and show messages on first submission
+    if (!this.hasMessages) {
+      if (this.hasWelcomeScreenTarget) {
+        this.welcomeScreenTarget.classList.add("hidden");
+      }
+      if (this.hasMessagesTarget) {
+        this.messagesTarget.classList.remove("hidden");
+      }
+      if (this.hasBottomInputTarget) {
+        this.bottomInputTarget.classList.remove("hidden");
+      }
+      this.hasMessages = true;
+    }
+
     this.accumulatedText = "";
     this.accumulatedContent = ""; // Reset for technical analysis mode
     this.progressEntries = []; // Reset progress entries
-    const prompt = this.promptTarget.value;
+    const prompt = this.currentPromptTextarea.value;
 
     // Clear progress sidebar and show placeholder
     if (this.hasProgressLogTarget) {
@@ -261,8 +440,18 @@ export default class extends Controller {
       return;
     }
 
-    this.sendBtnTarget.disabled = true;
-    this.promptTarget.disabled = true;
+    // Disable the appropriate button and textarea
+    this.currentSendBtn =
+      this.hasSendBtnCenteredTarget && !this.hasMessages
+        ? this.sendBtnCenteredTarget
+        : this.sendBtnTarget;
+
+    if (this.currentSendBtn) {
+      this.currentSendBtn.disabled = true;
+    }
+    if (this.currentPromptTextarea) {
+      this.currentPromptTextarea.disabled = true;
+    }
 
     const userMessage = this.addMessage("user", prompt);
     const aiMessage = this.addMessage("assistant", "");
@@ -321,12 +510,19 @@ export default class extends Controller {
           errorHtml;
       }
     } finally {
-      this.sendBtnTarget.disabled = false;
-      this.promptTarget.disabled = false;
-      this.promptTarget.value = "";
+      // Enable the appropriate buttons
+      if (this.currentSendBtn) {
+        this.currentSendBtn.disabled = false;
+      }
 
-      // Reset textarea height after clearing
-      this.resizeTextarea();
+      if (this.currentPromptTextarea) {
+        this.currentPromptTextarea.disabled = false;
+        this.currentPromptTextarea.value = "";
+        // Reset textarea height after clearing
+        const minHeight =
+          this.currentPromptTextarea === this.promptCenteredTarget ? 24 : 32;
+        this.resizeTextarea(this.currentPromptTextarea, minHeight);
+      }
     }
   }
 
@@ -583,6 +779,11 @@ export default class extends Controller {
 
     if (!this.currentProgressLog) return;
 
+    // Auto-expand sidebar if collapsed when progress appears
+    if (!this.progressSidebarOpen) {
+      this.openProgressSidebar();
+    }
+
     // Hide placeholder text when first progress entry is added
     const placeholder =
       this.progressContainerTarget?.querySelector(".text-center");
@@ -593,12 +794,12 @@ export default class extends Controller {
     const entry = document.createElement("div");
     entry.className = `${this.progressVariantClass(
       variant
-    )} flex items-start gap-2 py-1.5 px-2 rounded-md transition-colors duration-150 hover:bg-opacity-10 animate-fade-in`;
+    )} flex items-start gap-1.5 py-1 px-2 rounded transition-colors duration-150 hover:bg-opacity-10 animate-fade-in`;
     entry.style.whiteSpace = "pre-line";
     entry.style.wordBreak = "break-word";
 
     const messageSpan = document.createElement("span");
-    messageSpan.className = "flex-1 text-xs sm:text-sm leading-relaxed";
+    messageSpan.className = "flex-1 text-xs leading-relaxed";
     messageSpan.textContent = message;
 
     entry.appendChild(messageSpan);
@@ -1204,30 +1405,41 @@ ACCESS_TOKEN=your_access_token</pre><p class="text-xs text-gray-500 mt-2">Get AP
   }
 
   addMessage(role, content) {
+    // Hide welcome screen and show messages on first message
+    if (!this.hasMessages) {
+      if (this.hasWelcomeScreenTarget) {
+        this.welcomeScreenTarget.classList.add("hidden");
+      }
+      if (this.hasMessagesTarget) {
+        this.messagesTarget.classList.remove("hidden");
+      }
+      this.hasMessages = true;
+    }
+
     const messageDiv = document.createElement("div");
     messageDiv.className =
-      "mb-4 flex animate-fade-in " +
+      "mb-2 flex animate-fade-in " +
       (role === "user" ? "justify-end" : "justify-start");
 
     const isAI = role === "assistant";
-    const avatarBg = isAI
-      ? 'style="background-color: var(--accent-primary);"'
+    const avatarStyle = isAI
+      ? 'style="background: rgba(var(--accent-primary-rgb), 0.2); backdrop-filter: blur(8px);"'
       : 'style="background: linear-gradient(to right, var(--accent-primary), var(--accent-secondary));"';
-    const messageBg = isAI
-      ? `style="background-color: var(--bg-secondary); color: var(--text-primary);"`
+    const messageStyle = isAI
+      ? `style="background: rgba(var(--bg-secondary-rgb), 0.6); backdrop-filter: blur(8px); color: var(--text-primary); border: 1px solid var(--border-color);"`
       : `style="background: linear-gradient(to right, var(--accent-primary), var(--accent-secondary)); color: white;"`;
 
     messageDiv.innerHTML = `
-      <div class="flex gap-2 sm:gap-3 max-w-[90%] sm:max-w-[85%] ${
+      <div class="flex gap-2 max-w-[75%] ${
         role === "user" ? "flex-row-reverse" : ""
       }">
-        <div class="flex-shrink-0 w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center shadow-sm transition-transform duration-200 hover:scale-105" ${avatarBg}>
-          <span class="text-base sm:text-lg">${isAI ? "🤖" : "👤"}</span>
+        <div class="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center transition-transform duration-200 hover:scale-110" ${avatarStyle}>
+          <span class="text-xs">${isAI ? "🤖" : "👤"}</span>
         </div>
-        <div class="rounded-2xl px-3 sm:px-4 py-2.5 sm:py-3 shadow-sm transition-all duration-200 hover:shadow-md ${
+        <div class="glass-card rounded-xl px-3 py-2 shadow-sm transition-all duration-200 hover:shadow-md ${
           isAI ? "prose prose-sm max-w-none" : ""
-        }" ${messageBg}>
-          <div class="message-content text-sm sm:text-base ${
+        }" ${messageStyle}>
+          <div class="message-content text-xs leading-relaxed ${
             isAI ? "" : "whitespace-pre-wrap"
           }">${content}</div>
         </div>

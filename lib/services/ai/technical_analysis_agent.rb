@@ -33,8 +33,8 @@ module Services
       include Tools
 
       class << self
-        def analyze(query:, stream: false, use_react: true, &)
-          new.analyze(query: query, stream: stream, use_react: use_react, &)
+        def analyze(query:, stream: false, use_react: true, model: nil, &)
+          new.analyze(query: query, stream: stream, use_react: use_react, model: model, &)
         end
       end
 
@@ -48,8 +48,11 @@ module Services
         @learned_patterns = load_learned_patterns # Load learned patterns from storage
       end
 
-      def analyze(query:, stream: false, use_react: true, &)
+      def analyze(query:, stream: false, use_react: true, model: nil, &)
         return nil unless @client.enabled?
+
+        # Store model for use in this analysis
+        @selected_model = model
 
         # Clear caches for new conversation
         @tool_cache = {}
@@ -64,7 +67,7 @@ module Services
 
         if use_react
           # ReAct-based execution: Rails-controlled loop, LLM plans and reasons
-          return execute_react_loop(query: query, stream: stream, &)
+          return execute_react_loop(query: query, stream: stream, model: model, &)
         end
 
         # Legacy conversation-based execution (fallback)
@@ -111,18 +114,18 @@ module Services
         ]
 
         # Auto-select model (prefer faster models for agent)
-        model = if @client.provider == :ollama
-                  # For agent, prefer faster models - llama3.1:8b is good balance
-                  ENV['OLLAMA_MODEL'] || @client.selected_model || 'llama3.1:8b'
-                else
-                  'gpt-4o'
-                end
+        selected_model = model || if @client.provider == :ollama
+                                    # For agent, prefer faster models - llama3.1:8b is good balance
+                                    ENV['OLLAMA_MODEL'] || @client.selected_model || 'llama3.1:8b'
+                                  else
+                                    'gpt-4o'
+                                  end
 
         # Execute conversation with function calling
         if stream && block_given?
-          execute_conversation_stream(messages: messages, model: model, &)
+          execute_conversation_stream(messages: messages, model: selected_model, &)
         else
-          execute_conversation(messages: messages, model: model)
+          execute_conversation(messages: messages, model: selected_model)
         end
       end
     end

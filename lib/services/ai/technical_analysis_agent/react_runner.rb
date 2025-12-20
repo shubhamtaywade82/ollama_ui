@@ -12,11 +12,14 @@ module Services
         MAX_TIME_SECONDS = 300
         PLANNING_TIMEOUT = 30 # Shorter timeout for planning steps
 
-        def execute_react_loop(query:, stream: false, &block)
+        def execute_react_loop(query:, stream: false, model: nil, &block)
+          # Store model for use in planning and synthesis
+          @react_model = model
+
           context = AgentContext.new(user_query: query)
           iteration = 0
 
-          yield("🔍 [ReAct] Starting analysis loop\n") if block_given?
+          yield("🔍 Starting analysis loop\n") if block_given?
 
           loop do
             iteration += 1
@@ -24,24 +27,35 @@ module Services
             # Termination check
             if context.should_terminate?(max_iterations: MAX_ITERATIONS, max_time_seconds: MAX_TIME_SECONDS)
               if block_given?
-                yield("⏹️  [ReAct] Termination condition met (iterations: #{iteration}, observations: #{context.observations.length})\n")
+                yield("⏹️  Termination condition met (iterations: #{iteration}, observations: #{context.observations.length})\n")
               end
               break
             end
 
             # Plan next step (LLM decides what tool to call)
-            yield("🤔 [ReAct] Planning step #{iteration}...\n") if block_given?
+            yield("🤔 Planning step #{iteration}...\n") if block_given?
 
             begin
               llm_response = plan_next_step(context, stream: stream, &block)
             rescue Timeout::Error, StandardError => e
               Rails.logger.error("[ReActRunner] Planning step failed: #{e.class} - #{e.message}")
-              yield("⚠️  [ReAct] Planning timeout/error, using fallback logic\n") if block_given?
+              yield("⚠️  Planning timeout/error, using fallback logic\n") if block_given?
 
               # Smart fallback: continue workflow based on query and current state
               tool_call = determine_fallback_tool(context, iteration)
               unless tool_call
-                yield("⏹️  [ReAct] Cannot determine next step, proceeding to synthesis\n") if block_given?
+                # If we have no observations and no symbol, this is likely a general query
+                if context.observations.empty? && iteration == 1
+                  symbol = extract_symbol_from_query_fallback(context.user_query)
+                  unless symbol
+                    if block_given?
+                      yield("ℹ️  No instrument symbol found. This query may be better handled by direct LLM.\n")
+                    end
+                    yield("💡 Try: 'Analyze NIFTY' or 'What is the price of RELIANCE?'\n") if block_given?
+                    break
+                  end
+                end
+                yield("⏹️  Cannot determine next step, proceeding to synthesis\n") if block_given?
                 break
               end
             else
@@ -54,7 +68,7 @@ module Services
               unless tool_call
                 tool_call = determine_fallback_tool(context, iteration)
                 unless tool_call
-                  yield("⏹️  [ReAct] No tool call from LLM and no fallback, proceeding to synthesis\n") if block_given?
+                  yield("⏹️  No tool call from LLM and no fallback, proceeding to synthesis\n") if block_given?
                   break
                 end
               end
@@ -62,7 +76,7 @@ module Services
 
             # Handle final flag
             if tool_call && tool_call['final'] == true
-              yield("✅ [ReAct] Ready for final synthesis\n") if block_given?
+              yield("✅ Ready for final synthesis\n") if block_given?
               break
             end
 
@@ -74,13 +88,13 @@ module Services
             # Validate tool exists
             unless @tools.key?(tool_name)
               error_msg = "Unknown tool: #{tool_name}"
-              yield("❌ [ReAct] #{error_msg}\n") if block_given?
+              yield("❌ #{error_msg}\n") if block_given?
               context.add_observation(tool_name, tool_input, { error: error_msg })
               break
             end
 
             # Execute tool (Rails-controlled)
-            yield("🔧 [ReAct] Executing: #{tool_name}\n") if block_given?
+            yield("🔧 Executing: #{tool_name}\n") if block_given?
 
             # Log tool call for auditability
             Rails.logger.info("[ReActRunner] Tool call: #{tool_name} with args: #{tool_input.inspect}")
@@ -95,30 +109,97 @@ module Services
               context.add_observation(tool_name, tool_input, tool_result)
 
               if tool_result[:error]
-                yield("⚠️  [ReAct] Tool error: #{tool_result[:error]}\n") if block_given?
+                yield("⚠️  Tool error: #{tool_result[:error]}\n") if block_given?
               elsif block_given?
-                yield("✅ [ReAct] Tool completed successfully\n")
+                yield("✅ Tool completed successfully\n")
               end
             rescue StandardError => e
               error_result = { error: "#{e.class}: #{e.message}" }
               context.add_observation(tool_name, tool_input, error_result)
-              yield("❌ [ReAct] Tool exception: #{e.message}\n") if block_given?
+              yield("❌ Tool exception: #{e.message}\n") if block_given?
               Rails.logger.error("[ReActRunner] Tool execution error: #{e.class} - #{e.message}")
             end
 
             # Check if we have enough data for final analysis
             if context.ready_for_analysis? && iteration >= 2
-              yield("📊 [ReAct] Sufficient data collected, proceeding to synthesis\n") if block_given?
+              yield("📊 Sufficient data collected, proceeding to synthesis\n") if block_given?
               break
             end
           end
 
+          # Check if we have any observations before synthesis
+          if context.observations.empty?
+            yield("ℹ️  No data collected. This query may not require technical analysis.\n") if block_given?
+            if block_given?
+              yield("💡 For technical analysis, please specify a symbol (e.g., 'Analyze NIFTY', 'What is the price of RELIANCE?').\n")
+            end
+
+            # Return early with helpful message
+            return {
+              analysis: {
+                instrument: 'GENERAL',
+                verdict: 'NO_TRADE',
+                confidence: 0.0,
+                reasoning: 'No instrument data was collected. This query appears to be a general question about trading concepts rather than a specific instrument analysis. For technical analysis, please include a symbol (e.g., NIFTY, RELIANCE, TCS).'
+              },
+              analysis_valid: false,
+              analysis_errors: ['No instrument data collected'],
+              context: context.full_context,
+              iterations: iteration,
+              generated_at: Time.current,
+              provider: @client.provider
+            }
+          end
+
           # Final synthesis (LLM reasons over all facts)
-          yield("📝 [ReAct] Synthesizing final analysis...\n") if block_given?
+          yield("📝 Synthesizing final analysis...\n") if block_given?
           final_analysis_raw = synthesize_analysis(context, stream: stream, &block)
 
+          # Check if we got a fallback analysis (JSON string from build_fallback_analysis)
+          is_fallback_json = final_analysis_raw.is_a?(String) && final_analysis_raw.strip.start_with?('{') && final_analysis_raw.include?('"instrument"')
+
           # Parse and validate structured output
-          structured_output = parse_structured_output(final_analysis_raw)
+          structured_output = if is_fallback_json
+                                # Fallback analysis is already valid JSON string, parse it directly
+                                begin
+                                  parsed = JSON.parse(final_analysis_raw)
+                                  { valid: true, data: parsed, errors: [] }
+                                rescue JSON::ParserError => e
+                                  Rails.logger.error("[ReActRunner] Failed to parse fallback JSON: #{e.message}")
+                                  parse_structured_output(final_analysis_raw)
+                                end
+                              else
+                                parse_structured_output(final_analysis_raw)
+                              end
+
+          # Format and stream the final analysis result
+          if block_given?
+            # Enrich analysis data with LTP from context if available
+            enriched_data = structured_output[:data] || {}
+            if context.instrument_data && !enriched_data['ltp']
+              ltp = context.instrument_data['ltp'] || context.instrument_data[:ltp]
+              enriched_data['ltp'] = ltp if ltp
+            end
+
+            # If validation failed but we have minimal data, still show it without error
+            if !structured_output[:valid] && enriched_data.empty?
+              # No data at all - show error
+              error_msg = "⚠️ Analysis validation failed: #{structured_output[:errors]&.join(', ')}"
+              yield("\n\n#{error_msg}\n")
+            else
+              # We have data (valid or not), format and show it
+              # Only show validation error if we have very minimal data
+              if !structured_output[:valid] && enriched_data.keys.length <= 1
+                error_msg = "⚠️ Analysis validation failed: #{structured_output[:errors]&.join(', ')}"
+                yield("\n\n#{error_msg}\n")
+              end
+              formatted_result = format_analysis_result(enriched_data)
+              if formatted_result.present?
+                # Stream formatted result as content (not progress)
+                yield("\n\n#{formatted_result}\n")
+              end
+            end
+          end
 
           {
             analysis: structured_output[:data],
@@ -130,7 +211,7 @@ module Services
             provider: @client.provider
           }
         rescue StandardError => e
-          error_msg = "[ReAct] Error: #{e.class} - #{e.message}"
+          error_msg = "Error: #{e.class} - #{e.message}"
           yield(error_msg) if block_given?
           Rails.logger.error("[ReActRunner] Error: #{e.class} - #{e.message}")
           Rails.logger.error("[ReActRunner] Backtrace: #{e.backtrace.first(10).join("\n")}")
@@ -154,17 +235,17 @@ module Services
             { role: 'user', content: user_message }
           ]
 
-          model = if @client.provider == :ollama
-                    ENV['OLLAMA_MODEL'] || @client.selected_model || 'llama3.1:8b'
-                  else
-                    'gpt-4o'
-                  end
+          selected_model = @react_model || if @client.provider == :ollama
+                                             ENV['OLLAMA_MODEL'] || @client.selected_model || 'llama3.1:8b'
+                                           else
+                                             'gpt-4o'
+                                           end
 
           if stream && block_given?
             response_chunks = +''
             begin
               Timeout.timeout(PLANNING_TIMEOUT) do
-                @client.chat_stream(messages: messages, model: model, temperature: 0.3) do |chunk|
+                @client.chat_stream(messages: messages, model: selected_model, temperature: 0.3) do |chunk|
                   response_chunks << chunk if chunk
                   # Don't stream planning chunks to UI
                 end
@@ -177,7 +258,7 @@ module Services
           else
             begin
               Timeout.timeout(PLANNING_TIMEOUT) do
-                @client.chat(messages: messages, model: model, temperature: 0.3)
+                @client.chat(messages: messages, model: selected_model, temperature: 0.3)
               end
             rescue Timeout::Error
               Rails.logger.warn("[ReActRunner] Planning step timed out after #{PLANNING_TIMEOUT}s")
@@ -212,11 +293,11 @@ module Services
             { role: 'user', content: 'Based on all collected facts, provide the final structured analysis.' }
           ]
 
-          model = if @client.provider == :ollama
-                    ENV['OLLAMA_MODEL'] || @client.selected_model || 'llama3.1:8b'
-                  else
-                    'gpt-4o'
-                  end
+          selected_model = @react_model || if @client.provider == :ollama
+                                             ENV['OLLAMA_MODEL'] || @client.selected_model || 'llama3.1:8b'
+                                           else
+                                             'gpt-4o'
+                                           end
 
           # Use shorter timeout for synthesis (60s instead of 120s)
           synthesis_timeout = 60
@@ -225,21 +306,28 @@ module Services
             response_chunks = +''
             begin
               Timeout.timeout(synthesis_timeout) do
-                @client.chat_stream(messages: messages, model: model, temperature: 0.3) do |chunk|
+                @client.chat_stream(messages: messages, model: selected_model, temperature: 0.3) do |chunk|
                   response_chunks << chunk if chunk
                   yield(chunk) if block_given? # Stream synthesis to UI
                 end
               end
             rescue Timeout::Error
               Rails.logger.warn("[ReActRunner] Synthesis timed out after #{synthesis_timeout}s")
-              # Return partial response if available
-              response_chunks.presence || build_fallback_analysis(context)
+              # Use fallback analysis when timeout occurs (response is likely incomplete)
+              build_fallback_analysis(context)
+            else
+              # Check if response is complete enough (has JSON structure)
+              if response_chunks.strip.length < 50 || !response_chunks.include?('{')
+                Rails.logger.info('[ReActRunner] Response too short or incomplete, using fallback analysis')
+                build_fallback_analysis(context)
+              else
+                response_chunks
+              end
             end
-            response_chunks
           else
             begin
               Timeout.timeout(synthesis_timeout) do
-                @client.chat(messages: messages, model: model, temperature: 0.3)
+                @client.chat(messages: messages, model: selected_model, temperature: 0.3)
               end
             rescue Timeout::Error
               Rails.logger.warn("[ReActRunner] Synthesis timed out after #{synthesis_timeout}s")
@@ -255,9 +343,17 @@ module Services
 
           # Step 1: Resolve instrument if not done
           if !context.instrument_resolved && iteration == 1 && symbol
+            # Auto-detect segment (index vs equity) using helper method
+            segment = detect_segment_for_symbol(symbol, nil)
+            exchange = detect_exchange_for_index(symbol, nil)
+
             return {
               'tool' => 'get_instrument_ltp',
-              'arguments' => { 'underlying_symbol' => symbol || 'NIFTY', 'segment' => 'index' }
+              'arguments' => {
+                'underlying_symbol' => symbol,
+                'segment' => segment,
+                'exchange' => exchange
+              }
             }
           end
 
@@ -266,19 +362,44 @@ module Services
             # Check what tools have been called
             called_tools = context.observations.map { |obs| obs[:tool] }
 
-            # If user asked for indicators and we haven't calculated any
-            if query_upper.include?('INDICATOR') || query_upper.include?('RSI') || query_upper.include?('MACD') || query_upper.include?('TECHNICAL')
-              unless called_tools.include?('calculate_indicator') || called_tools.include?('get_historical_data')
-                # Get historical data first (needed for indicators)
+            # Detect if user wants analysis/indicators (broader detection)
+            wants_analysis = query_upper.include?('ANALYZE') ||
+                             query_upper.include?('ANALYSIS') ||
+                             query_upper.include?('INDICATOR') ||
+                             query_upper.include?('RSI') ||
+                             query_upper.include?('MACD') ||
+                             query_upper.include?('ADX') ||
+                             query_upper.include?('TECHNICAL') ||
+                             query_upper.include?('SUPERTREND') ||
+                             query_upper.include?('BOLLINGER') ||
+                             query_upper.match?(/\b(TREND|SUPPORT|RESISTANCE|PATTERN)\b/)
+
+            # Check if query is just asking for LTP/price (simple query)
+            is_simple_ltp_query = query_upper.match?(/\b(LTP|PRICE|CURRENT|LAST)\b/) &&
+                                  !wants_analysis
+
+            # If simple LTP query and we already have LTP, proceed to synthesis
+            return { 'final' => true } if is_simple_ltp_query && called_tools.include?('get_instrument_ltp')
+
+            # If user wants analysis/indicators, fetch data and calculate indicators
+            if wants_analysis
+              # Step 2a: Get historical data if not already fetched
+              unless called_tools.include?('get_historical_data')
                 instrument_data = context.instrument_data || context.observations.find do |obs|
                   obs[:tool] == 'get_instrument_ltp'
                 end&.dig(:result)
                 if instrument_data
+                  underlying_symbol = instrument_data['underlying_symbol'] || instrument_data[:underlying_symbol] || symbol
+                  segment = instrument_data['segment'] || instrument_data[:segment] || detect_segment_for_symbol(
+                    underlying_symbol, nil
+                  )
+
+                  Rails.logger.info("[ReActRunner] Fallback: Fetching historical data for #{underlying_symbol} (#{segment})")
                   return {
                     'tool' => 'get_historical_data',
                     'arguments' => {
-                      'underlying_symbol' => instrument_data['underlying_symbol'] || instrument_data[:underlying_symbol] || symbol,
-                      'segment' => instrument_data['segment'] || instrument_data[:segment] || 'index',
+                      'underlying_symbol' => underlying_symbol,
+                      'segment' => segment,
                       'interval' => '15',
                       'days' => 3
                     }
@@ -286,13 +407,15 @@ module Services
                 end
               end
 
-              # If we have historical data but no indicators, calculate RSI
+              # Step 2b: Calculate indicators if we have historical data but no indicators yet
               if called_tools.include?('get_historical_data') && !called_tools.include?('calculate_indicator')
                 instrument_data = context.instrument_data || context.observations.find do |obs|
                   obs[:tool] == 'get_instrument_ltp'
                 end&.dig(:result)
                 if instrument_data
                   symbol_key = instrument_data['underlying_symbol'] || instrument_data[:underlying_symbol] || symbol || 'NIFTY'
+
+                  Rails.logger.info("[ReActRunner] Fallback: Calculating RSI indicator for #{symbol_key}")
                   return {
                     'tool' => 'calculate_indicator',
                     'arguments' => {
@@ -304,10 +427,43 @@ module Services
                   }
                 end
               end
+
+              # Step 2c: If we have RSI, calculate additional indicators for comprehensive analysis
+              if called_tools.include?('calculate_indicator') && iteration >= 3
+                # Check if we've calculated multiple indicators
+                indicator_calls = called_tools.count { |t| t == 'calculate_indicator' }
+
+                # Calculate MACD if not done yet (for trend analysis)
+                if indicator_calls == 1
+                  instrument_data = context.instrument_data || context.observations.find do |obs|
+                    obs[:tool] == 'get_instrument_ltp'
+                  end&.dig(:result)
+                  if instrument_data
+                    symbol_key = instrument_data['underlying_symbol'] || instrument_data[:underlying_symbol] || symbol || 'NIFTY'
+                    Rails.logger.info("[ReActRunner] Fallback: Calculating MACD indicator for #{symbol_key}")
+                    return {
+                      'tool' => 'calculate_indicator',
+                      'arguments' => {
+                        'index_key' => symbol_key,
+                        'indicator' => 'MACD',
+                        'period' => 14,
+                        'interval' => '15'
+                      }
+                    }
+                  end
+                end
+              end
             end
 
-            # If we have some data, we can proceed to synthesis
-            return { 'final' => true } if called_tools.length >= 2
+            # Only proceed to synthesis if:
+            # 1. Simple LTP query and we have LTP, OR
+            # 2. We have indicators/data and user didn't ask for analysis, OR
+            # 3. We have sufficient data (LTP + historical + at least one indicator)
+            has_sufficient_data = called_tools.include?('get_instrument_ltp') &&
+                                  (is_simple_ltp_query ||
+                                   (called_tools.include?('get_historical_data') && called_tools.include?('calculate_indicator')))
+
+            return { 'final' => true } if has_sufficient_data
           end
 
           nil
@@ -328,6 +484,81 @@ module Services
             match = query.match(/\b([A-Z]{2,10})\b/)
             match ? match[1] : nil
           end
+        end
+
+        def format_analysis_result(analysis_data)
+          return nil unless analysis_data.is_a?(Hash)
+
+          lines = []
+          lines << '📊 **Analysis Result**'
+          lines << ''
+
+          # Instrument
+          lines << "**Instrument:** #{analysis_data['instrument']}" if analysis_data['instrument']
+
+          # LTP if available
+          if analysis_data['ltp'] || (analysis_data['indicators'] && analysis_data['indicators'].is_a?(Hash))
+            # Try to extract LTP from context if not directly in analysis
+            ltp = analysis_data['ltp']
+            lines << "**Current Price:** #{ltp}" if ltp
+          end
+
+          # Trend
+          if analysis_data['trend']
+            trend_emoji = case analysis_data['trend'].to_s.upcase
+                          when 'BULLISH' then '📈'
+                          when 'BEARISH' then '📉'
+                          else '➡️'
+                          end
+            lines << "**Trend:** #{trend_emoji} #{analysis_data['trend']}"
+          end
+
+          # Indicators
+          if analysis_data['indicators'] && analysis_data['indicators'].is_a?(Hash) && analysis_data['indicators'].any?
+            lines << ''
+            lines << '**Indicators:**'
+            analysis_data['indicators'].each do |key, value|
+              lines << "  - #{key}: #{value}"
+            end
+          end
+
+          # Verdict
+          if analysis_data['verdict']
+            verdict_emoji = case analysis_data['verdict'].to_s.upcase
+                            when 'BULLISH_BIAS' then '🟢'
+                            when 'BEARISH_BIAS' then '🔴'
+                            when 'NO_TRADE' then '⚪'
+                            else '🟡'
+                            end
+            lines << ''
+            lines << "**Verdict:** #{verdict_emoji} #{analysis_data['verdict']}"
+          end
+
+          # Recommendation
+          if analysis_data['recommendation'] && analysis_data['recommendation'].is_a?(Hash)
+            rec = analysis_data['recommendation']
+            lines << ''
+            lines << '**Recommendation:**'
+            lines << "  - **Action:** #{rec['action']}" if rec['action']
+            lines << "  - **Strike:** #{rec['strike_preference']}" if rec['strike_preference'].present?
+            lines << "  - **Risk Note:** #{rec['risk_note']}" if rec['risk_note'].present?
+          end
+
+          # Confidence
+          if analysis_data['confidence']
+            confidence_pct = (analysis_data['confidence'].to_f * 100).round(1)
+            lines << ''
+            lines << "**Confidence:** #{confidence_pct}%"
+          end
+
+          # Reasoning
+          if analysis_data['reasoning']
+            lines << ''
+            lines << '**Reasoning:**'
+            lines << analysis_data['reasoning']
+          end
+
+          lines.join("\n")
         end
 
         def build_react_planning_prompt(context)

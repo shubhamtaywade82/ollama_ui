@@ -1,6 +1,6 @@
 <div data-controller="trading-chat theme" class="flex flex-col h-screen overflow-hidden" style="background-color: var(--bg-primary);">
   <!-- Compact Header -->
-  <header class="glass-header border-b sticky top-0 z-40" style="border-color: var(--border-color); background: rgba(var(--bg-secondary-rgb), 0.8); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);">
+  <header class="glass-header border-b sticky top-0 z-40" style="border-color: var(--border-color);">
     <div class="px-3 py-2">
       <div class="flex items-center justify-between gap-3">
         <div class="flex items-center gap-2 flex-1 min-w-0">
@@ -9,7 +9,7 @@
             <a href="/" class="px-2 py-1 rounded text-xs font-medium transition hover:opacity-80" data-theme-text-secondary style="color: var(--text-secondary);">Chat</a>
             <a href="/trading" class="px-2 py-1 rounded text-xs font-medium transition" style="background-color: var(--accent-primary); color: white; opacity: 0.9;">Trading</a>
           </div>
-          
+
           <!-- Mode Toggle (Default: Analysis) -->
           <div class="flex items-center gap-1 ml-2" data-trading-chat-target="modeSelector">
             <button data-action="click->trading-chat#switchMode" data-mode="technical_analysis"
@@ -27,31 +27,33 @@
             </button>
           </div>
 
+          <!-- Model Selector -->
+          <div class="ml-2 flex items-center gap-2">
+            <select data-trading-chat-target="model" data-theme-bg-secondary class="rounded-md border px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:border-transparent transition" style="border-color: var(--border-color); color: var(--text-primary); background-color: var(--bg-secondary);" onfocus="this.style.setProperty('--tw-ring-color', 'var(--accent-primary)')">
+              <option>Loading models…</option>
+            </select>
+            <span data-trading-chat-target="loading" class="text-xs hidden flex items-center gap-1.5" data-theme-text-secondary style="color: var(--text-secondary);">
+              <svg class="animate-spin h-3 w-3" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+            </span>
+          </div>
+
           <!-- Account Value (Compact) -->
           <div class="ml-auto flex items-center gap-3">
             <div class="text-right hidden sm:flex items-center gap-2">
               <span class="text-xs" data-theme-text-secondary style="color: var(--text-secondary);">Balance:</span>
               <span data-trading-chat-target="accountValue" class="text-xs font-bold" data-theme-text-primary style="color: var(--text-primary);">Loading...</span>
             </div>
-            
-            <!-- Progress Toggle Button -->
-            <button data-action="click->trading-chat#toggleProgressSidebar"
-              class="p-1.5 rounded transition-all duration-200 hover:scale-110 active:scale-95 relative"
-              data-theme-bg-tertiary
-              style="background-color: var(--bg-tertiary);"
-              aria-label="Toggle progress">
-              <svg class="w-4 h-4" data-theme-text-primary style="color: var(--text-primary);" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
-              </svg>
-              <span data-trading-chat-target="progressBadge" class="hidden absolute -top-1 -right-1 w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
-            </button>
+
 
             <!-- Theme Switcher -->
             <div class="relative" data-controller="theme">
               <button data-action="click->theme#toggleDropdown" class="p-1.5 rounded transition-all duration-200 hover:scale-110 active:scale-95" data-theme-bg-tertiary style="background-color: var(--bg-tertiary);" type="button" aria-label="Theme switcher">
                 <svg class="w-4 h-4" data-theme-text-primary style="color: var(--text-primary);" fill="currentColor" viewBox="0 0 20 20"><path d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z"/></svg>
               </button>
-              <div data-theme-dropdown class="hidden absolute right-0 mt-2 w-40 rounded-lg shadow-xl z-50 py-1.5 glass-card" data-theme-bg-secondary style="background: rgba(var(--bg-secondary-rgb), 0.95); backdrop-filter: blur(12px); border: 1px solid var(--border-color);">
+              <div data-theme-dropdown class="hidden absolute right-0 mt-2 w-40 rounded-lg shadow-xl z-50 py-1.5 glass-card" data-theme-bg-secondary style="border: 1px solid var(--border-color);">
                 <button data-action="click->theme#switch" data-theme="light" class="w-full px-3 py-1.5 text-left text-xs hover:opacity-80 transition flex items-center gap-2" data-theme-text-primary style="color: var(--text-primary);">
                   <span class="w-3 h-3 rounded-full border" style="background: linear-gradient(135deg, #f9fafb 50%, #111827 50%); border-color: var(--border-color);"></span>
                   Light
@@ -90,19 +92,32 @@
 
   <!-- Main Content Area -->
   <div class="flex-1 flex overflow-hidden relative" style="background-color: var(--bg-primary);">
-    <!-- Collapsible Progress Sidebar (Hidden by Default) -->
+    <!-- Floating Expand Button (Shown when sidebar is collapsed) -->
+    <button data-trading-chat-target="expandProgressBtn"
+      data-action="click->trading-chat#toggleProgressSidebar"
+      class="hidden fixed left-2 top-1/2 -translate-y-1/2 z-50 p-2 rounded-lg shadow-lg transition-all duration-200 hover:scale-110 active:scale-95"
+      data-theme-bg-tertiary
+      style="background-color: var(--bg-tertiary); border: 1px solid var(--border-color);"
+      aria-label="Expand progress sidebar">
+      <svg class="w-5 h-5" data-theme-text-primary style="color: var(--text-primary);" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"/>
+      </svg>
+    </button>
+
+    <!-- Collapsible Progress Sidebar (Left Side, Expanded by Default) -->
     <aside data-trading-chat-target="progressSidebar"
-      class="fixed inset-y-0 right-0 z-40 w-72 glass-card border-l flex flex-col transform transition-transform duration-300 ease-in-out translate-x-full"
-      style="border-color: var(--border-color); background: rgba(var(--bg-secondary-rgb), 0.95); backdrop-filter: blur(12px); top: 41px;">
+      class="w-72 glass-card border-r flex flex-col transform transition-all duration-300 ease-in-out flex-shrink-0"
+      style="border-color: var(--border-color);">
       <div class="p-3 border-b flex items-center justify-between" style="border-color: var(--border-color);">
         <h2 class="text-xs font-bold uppercase tracking-wide" data-theme-text-primary style="color: var(--text-primary);">Agent Progress</h2>
         <button data-action="click->trading-chat#toggleProgressSidebar"
           class="p-1 rounded transition hover:opacity-80"
           data-theme-bg-tertiary
           style="background-color: var(--bg-tertiary);"
-          aria-label="Close progress">
+          aria-label="Toggle progress sidebar"
+          data-trading-chat-target="progressToggleBtn">
           <svg class="w-4 h-4" data-theme-text-primary style="color: var(--text-primary);" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7"/>
           </svg>
         </button>
       </div>
@@ -116,38 +131,84 @@
 
     <!-- Chat Messages - Full Width -->
     <main class="flex-1 overflow-y-auto min-w-0" data-trading-chat-target="messagesContainer" style="background-color: var(--bg-primary);">
-      <div class="w-full px-4 py-3" data-trading-chat-target="messages">
-        <div class="mb-3 flex justify-start animate-fade-in">
-          <div class="flex gap-2 max-w-[75%]">
-            <div class="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center glass-card" data-theme-accent style="background: rgba(var(--accent-primary-rgb), 0.2); backdrop-filter: blur(8px);">
-              <span class="text-xs">🤖</span>
-            </div>
-            <div class="glass-card rounded-xl px-3 py-2 transition-all duration-200 hover:shadow-md" data-theme-text-primary style="background: rgba(var(--bg-secondary-rgb), 0.6); backdrop-filter: blur(8px); color: var(--text-primary); border: 1px solid var(--border-color);">
-              <div class="prose prose-sm max-w-none">
-                <p class="text-xs font-medium mb-1.5">Welcome! I can help with:</p>
-                <ul class="text-xs space-y-0.5 mb-1.5">
-                  <li>📊 Real-time quotes & technical analysis</li>
-                  <li>💰 Account balance, positions & holdings</li>
-                  <li>📈 Portfolio tracking & insights</li>
-                </ul>
-                <p class="text-xs italic opacity-75"><em>Try: "Analyze NIFTY with technical indicators"</em></p>
-              </div>
+      <!-- Centered Welcome Message (ChatGPT style) -->
+      <div data-trading-chat-target="welcomeScreen" class="flex flex-col items-center justify-center min-h-full px-4 py-8">
+        <div class="w-full max-w-3xl">
+          <!-- Welcome Title -->
+          <div class="text-center mb-8">
+            <h1 class="text-2xl sm:text-3xl font-bold mb-2" data-theme-text-primary style="color: var(--text-primary);">
+              How can I help you today?
+            </h1>
+            <p class="text-sm" data-theme-text-secondary style="color: var(--text-secondary);">
+              Ask about stocks, technical analysis, account info, or trading insights
+            </p>
+          </div>
+
+          <!-- Scrollable Examples Grid -->
+          <div class="max-h-[60vh] overflow-y-auto scrollbar-thin mb-6">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <% @examples.each do |category_data| %>
+                <div class="glass-card rounded-lg p-3 transition-all duration-200 hover:shadow-lg hover:scale-[1.02]">
+                  <h3 class="text-xs font-bold mb-2 uppercase tracking-wide" data-theme-text-primary style="color: var(--text-primary);">
+                    <%= category_data[:category] %>
+                  </h3>
+                  <div class="space-y-1.5">
+                    <% category_data[:examples].each do |example| %>
+                      <button
+                        data-action="click->trading-chat#useExample"
+                        data-example="<%= example %>"
+                        class="w-full text-left px-2.5 py-1.5 rounded text-xs transition-all duration-200 hover:scale-105 active:scale-95 text-left"
+                        data-theme-bg-tertiary
+                        style="background-color: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border-color);">
+                        <%= example %>
+                      </button>
+                    <% end %>
+                  </div>
+                </div>
+              <% end %>
             </div>
           </div>
+
+          <!-- Centered Input Box (ChatGPT style) -->
+          <div class="mt-8 w-full max-w-2xl mx-auto">
+            <form data-action="submit->trading-chat#submit" class="relative">
+              <div class="flex items-end gap-2 glass-card rounded-2xl px-4 py-3 shadow-lg border transition-all duration-200 hover:shadow-xl"
+                style="border-color: var(--border-color);">
+                <div class="flex-1 relative">
+                  <textarea data-trading-chat-target="promptCentered" rows="1"
+                    placeholder="Message Trading Assistant..."
+                    class="w-full bg-transparent border-0 px-0 py-0 text-sm placeholder-gray-400 focus:outline-none resize-none overflow-hidden transition-all duration-200"
+                    style="color: var(--text-primary); min-height: 1.5rem; max-height: 12rem; line-height: 1.5;"
+                    onfocus="this.style.setProperty('--tw-ring-color', 'var(--accent-primary)')"></textarea>
+                </div>
+                <button data-trading-chat-target="sendBtnCentered" type="submit"
+                  class="rounded-lg text-white h-8 w-8 flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 hover:scale-110 active:scale-95 flex-shrink-0"
+                  style="background: linear-gradient(to right, var(--accent-primary), var(--accent-secondary));">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                  </svg>
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
+      </div>
+
+      <!-- Messages Container (Hidden initially) -->
+      <div class="w-full px-4 py-3 hidden" data-trading-chat-target="messages">
       </div>
     </main>
   </div>
 
-  <!-- Compact Input Area -->
-  <div class="border-t sticky bottom-0 z-30 glass-header" style="border-color: var(--border-color); background: rgba(var(--bg-secondary-rgb), 0.9); backdrop-filter: blur(12px);">
+  <!-- Bottom Input Area (Shown when messages exist) -->
+  <div data-trading-chat-target="bottomInput" class="border-t sticky bottom-0 z-30 glass-header hidden" style="border-color: var(--border-color);">
     <form data-action="submit->trading-chat#submit" class="w-full px-4 py-2">
       <div class="flex items-end gap-2">
         <div class="flex-1 relative">
           <textarea data-trading-chat-target="prompt" rows="1"
             placeholder="Ask about stocks, analysis, account... (Enter to send)"
             class="w-full rounded-lg border px-3 py-2 text-xs placeholder-gray-400 focus:outline-none focus:ring-2 focus:border-transparent resize-none overflow-hidden transition-all duration-200 glass-input"
-            style="border-color: var(--border-color); color: var(--text-primary); background: rgba(var(--bg-secondary-rgb), 0.7); backdrop-filter: blur(8px); min-height: 2rem; max-height: 8rem; line-height: 1.4;"
+            style="border-color: var(--border-color); color: var(--text-primary); min-height: 2rem; max-height: 8rem; line-height: 1.4;"
             onfocus="this.style.setProperty('--tw-ring-color', 'var(--accent-primary)')"></textarea>
         </div>
         <button data-trading-chat-target="sendBtn" type="submit"

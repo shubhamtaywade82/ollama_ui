@@ -11,58 +11,89 @@ export default class extends Controller {
   static targets = [
     "model",
     "prompt",
+    "promptCentered",
     "output",
     "sendBtn",
+    "sendBtnCentered",
     "loading",
     "messages",
     "messagesContainer",
     "modelName",
+    "deepModeToggle",
+    "welcomeScreen",
+    "bottomInput",
   ];
 
   connect() {
     this.conversationHistory = [];
+    this.hasMessages = false;
     this.loadModels();
     this.setupTextareaEnterHandler();
     this.setupTextareaAutoResize();
+    this.setupCenteredTextareaAutoResize();
   }
 
   setupTextareaEnterHandler() {
-    // Handle Enter key - submit, Shift+Enter for new line
-    this.promptTarget.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        // Find the form and trigger submit
-        const form = this.element.querySelector("form");
-        if (form) {
-          form.dispatchEvent(
-            new Event("submit", { bubbles: true, cancelable: true })
-          );
+    // Handle Enter key for both textareas - submit, Shift+Enter for new line
+    const setupHandler = (textarea) => {
+      textarea.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          // Find the form and trigger submit
+          const form = textarea.closest("form");
+          if (form) {
+            form.dispatchEvent(
+              new Event("submit", { bubbles: true, cancelable: true })
+            );
+          }
         }
-      }
-    });
+      });
+    };
+
+    if (this.hasPromptTarget) {
+      setupHandler(this.promptTarget);
+    }
+    if (this.hasPromptCenteredTarget) {
+      setupHandler(this.promptCenteredTarget);
+    }
   }
 
   setupTextareaAutoResize() {
+    if (!this.hasPromptTarget) return;
+
     const textarea = this.promptTarget;
 
     // Initial resize
-    this.resizeTextarea();
+    this.resizeTextarea(textarea, 32, 128); // min: 2rem, max: 8rem
 
     // Auto-resize on input
     textarea.addEventListener("input", () => {
-      this.resizeTextarea();
+      this.resizeTextarea(textarea, 32, 128);
     });
   }
 
-  resizeTextarea() {
-    const textarea = this.promptTarget;
+  setupCenteredTextareaAutoResize() {
+    if (!this.hasPromptCenteredTarget) return;
+
+    const textarea = this.promptCenteredTarget;
+
+    // Initial resize
+    this.resizeTextarea(textarea, 24, 192); // min: 1.5rem, max: 12rem
+
+    // Auto-resize on input
+    textarea.addEventListener("input", () => {
+      this.resizeTextarea(textarea, 24, 192);
+    });
+  }
+
+  resizeTextarea(textarea, minHeight = 32, maxHeight = 128) {
+    if (!textarea) return;
+
     // Reset height to auto to get the correct scrollHeight
     textarea.style.height = "auto";
 
     // Calculate the new height based on scrollHeight
     const scrollHeight = textarea.scrollHeight;
-    const minHeight = 48; // 3rem = 48px
-    const maxHeight = 192; // 12rem = 192px
 
     // Set the height, but limit to max-height
     const newHeight = Math.min(Math.max(scrollHeight, minHeight), maxHeight);
@@ -122,19 +153,78 @@ export default class extends Controller {
     }
   }
 
+  useExample(event) {
+    const example = event.currentTarget.dataset.example;
+    if (!example) return;
+
+    // Determine which textarea to use
+    const textarea =
+      this.hasMessages && this.hasPromptTarget
+        ? this.promptTarget
+        : this.hasPromptCenteredTarget
+        ? this.promptCenteredTarget
+        : null;
+
+    if (textarea) {
+      textarea.value = example;
+      textarea.focus();
+      this.resizeTextarea(
+        textarea,
+        textarea === this.promptCenteredTarget ? 24 : 32,
+        textarea === this.promptCenteredTarget ? 192 : 128
+      );
+    }
+  }
+
   async submit(event) {
     event.preventDefault();
     this.accumulatedText = "";
+
+    // Determine which textarea and button to use
+    const isWelcomeScreen =
+      !this.hasMessages &&
+      this.hasWelcomeScreenTarget &&
+      !this.welcomeScreenTarget.classList.contains("hidden");
+    const promptTextarea =
+      isWelcomeScreen && this.hasPromptCenteredTarget
+        ? this.promptCenteredTarget
+        : this.hasPromptTarget
+        ? this.promptTarget
+        : null;
+    const sendBtn =
+      isWelcomeScreen && this.hasSendBtnCenteredTarget
+        ? this.sendBtnCenteredTarget
+        : this.hasSendBtnTarget
+        ? this.sendBtnTarget
+        : null;
+
+    if (!promptTextarea) {
+      console.error("No prompt textarea found");
+      return;
+    }
+
     const model = this.modelTarget.value;
-    const prompt = this.promptTarget.value;
+    const prompt = promptTextarea.value;
 
     if (!model || !prompt.trim()) {
       alert("Please choose a model and enter a prompt.");
       return;
     }
 
-    this.sendBtnTarget.disabled = true;
-    this.promptTarget.disabled = true;
+    // Hide welcome screen and show messages/bottom input on first submission
+    if (!this.hasMessages && this.hasWelcomeScreenTarget) {
+      this.welcomeScreenTarget.classList.add("hidden");
+      if (this.hasMessagesTarget) {
+        this.messagesTarget.classList.remove("hidden");
+      }
+      if (this.hasBottomInputTarget) {
+        this.bottomInputTarget.classList.remove("hidden");
+      }
+      this.hasMessages = true;
+    }
+
+    if (sendBtn) sendBtn.disabled = true;
+    promptTextarea.disabled = true;
 
     // Add user message
     const userMessage = this.addMessage("user", prompt);
@@ -149,6 +239,10 @@ export default class extends Controller {
     // Store in history
     this.conversationHistory.push({ role: "user", content: prompt });
 
+    // Get deep mode state
+    const deepMode =
+      this.hasDeepModeToggleTarget && this.deepModeToggleTarget.checked;
+
     try {
       const res = await fetch("/chats/stream", {
         method: "POST",
@@ -156,7 +250,7 @@ export default class extends Controller {
           "Content-Type": "application/json",
           "X-CSRF-Token": this.csrf(),
         },
-        body: JSON.stringify({ model, prompt }),
+        body: JSON.stringify({ model, prompt, deep_mode: deepMode }),
       });
 
       if (!res.ok) {
@@ -187,10 +281,34 @@ export default class extends Controller {
 
                 // Update the current AI message
                 const html = marked.parse(this.accumulatedText);
-                this.currentMessageElement.querySelector(
-                  ".message-content"
-                ).innerHTML = html;
-                this.scrollToBottom();
+                if (this.currentMessageElement) {
+                  this.currentMessageElement.querySelector(
+                    ".message-content"
+                  ).innerHTML = html;
+                  this.scrollToBottom();
+                }
+              } else if (data.type === "result" && data.text) {
+                // Result event - ensure all content is displayed
+                if (!this.accumulatedText) this.accumulatedText = "";
+                // Only append if result text is different from accumulated
+                if (!this.accumulatedText.includes(data.text)) {
+                  this.accumulatedText += data.text;
+                } else {
+                  this.accumulatedText = data.text;
+                }
+
+                // Update the current AI message
+                const html = marked.parse(this.accumulatedText);
+                if (this.currentMessageElement) {
+                  this.currentMessageElement.querySelector(
+                    ".message-content"
+                  ).innerHTML = html;
+                  this.scrollToBottom();
+                }
+              } else if (data.type === "info" && data.text) {
+                // Info messages (progress updates from agents)
+                // Show as a temporary status message
+                this.showInfoMessage(data.text);
               } else if (data.error) {
                 throw new Error(data.error);
               }
@@ -210,12 +328,36 @@ export default class extends Controller {
         this.addMessage("assistant", errorHtml);
       }
     } finally {
-      this.sendBtnTarget.disabled = false;
-      this.promptTarget.disabled = false;
-      this.promptTarget.value = "";
+      // Determine which textarea and button to use
+      const isWelcomeScreen =
+        !this.hasMessages &&
+        this.hasWelcomeScreenTarget &&
+        !this.welcomeScreenTarget.classList.contains("hidden");
+      const promptTextarea =
+        isWelcomeScreen && this.hasPromptCenteredTarget
+          ? this.promptCenteredTarget
+          : this.hasPromptTarget
+          ? this.promptTarget
+          : null;
+      const sendBtn =
+        isWelcomeScreen && this.hasSendBtnCenteredTarget
+          ? this.sendBtnCenteredTarget
+          : this.hasSendBtnTarget
+          ? this.sendBtnTarget
+          : null;
 
-      // Reset textarea height after clearing
-      this.resizeTextarea();
+      if (sendBtn) sendBtn.disabled = false;
+      if (promptTextarea) {
+        promptTextarea.disabled = false;
+        promptTextarea.value = "";
+
+        // Reset textarea height after clearing
+        this.resizeTextarea(
+          promptTextarea,
+          promptTextarea === this.promptCenteredTarget ? 24 : 32,
+          promptTextarea === this.promptCenteredTarget ? 192 : 128
+        );
+      }
 
       // Store response in history
       if (this.accumulatedText) {
@@ -228,6 +370,18 @@ export default class extends Controller {
   }
 
   addMessage(role, content) {
+    // Show messages container and hide welcome screen if this is the first message
+    if (!this.hasMessages && this.hasWelcomeScreenTarget) {
+      this.welcomeScreenTarget.classList.add("hidden");
+      if (this.hasMessagesTarget) {
+        this.messagesTarget.classList.remove("hidden");
+      }
+      if (this.hasBottomInputTarget) {
+        this.bottomInputTarget.classList.remove("hidden");
+      }
+      this.hasMessages = true;
+    }
+
     const messageDiv = document.createElement("div");
     messageDiv.className =
       "mb-4 flex " + (role === "user" ? "justify-end" : "justify-start");
@@ -252,12 +406,16 @@ export default class extends Controller {
         }" ${messageBg}>
           <div class="message-content ${
             isAI ? "" : "whitespace-pre-wrap"
-          }">${content}</div>
+          }" style="color: var(--text-primary);">
+            ${content}
+          </div>
         </div>
       </div>
     `;
 
-    this.messagesTarget.appendChild(messageDiv);
+    if (this.hasMessagesTarget) {
+      this.messagesTarget.appendChild(messageDiv);
+    }
     return messageDiv;
   }
 
@@ -266,6 +424,22 @@ export default class extends Controller {
       this.messagesContainerTarget.scrollTop =
         this.messagesContainerTarget.scrollHeight;
     }, 1000);
+  }
+
+  showInfoMessage(text) {
+    // Show temporary info message in the AI response
+    if (this.currentMessageElement) {
+      const infoDiv = document.createElement("div");
+      infoDiv.className = "text-sm opacity-70 mb-2";
+      infoDiv.textContent = text;
+      const contentDiv =
+        this.currentMessageElement.querySelector(".message-content");
+      if (contentDiv && !contentDiv.querySelector(".info-message")) {
+        infoDiv.classList.add("info-message");
+        contentDiv.insertBefore(infoDiv, contentDiv.firstChild);
+        this.scrollToBottom();
+      }
+    }
   }
 
   csrf() {

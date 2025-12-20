@@ -5,6 +5,7 @@ class TradingController < ApplicationController
 
   def index
     # Trading chat interface
+    @examples = trading_examples
   end
 
   def account_info
@@ -173,16 +174,17 @@ class TradingController < ApplicationController
 
     # Limit prompt size
     max_prompt_length = ENV.fetch('AI_MAX_PROMPT_LENGTH', '2000').to_i
-    if user_prompt.length > max_prompt_length
-      user_prompt = user_prompt[0..max_prompt_length - 1] + '... [truncated]'
-    end
+    user_prompt = user_prompt[0..(max_prompt_length - 1)] + '... [truncated]' if user_prompt.length > max_prompt_length
 
     # Generate unique job ID
     job_id = SecureRandom.uuid
 
+    # Get model from params (optional, defaults to agent's selected model)
+    model = params[:model].to_s.presence
+
     # Enqueue background job (non-blocking)
     use_react = params[:use_react] != 'false'
-    TechnicalAnalysisJob.perform_later(job_id, user_prompt, use_react: use_react)
+    TechnicalAnalysisJob.perform_later(job_id, user_prompt, use_react: use_react, model: model)
 
     # Return job ID immediately (non-blocking)
     render json: {
@@ -209,8 +211,9 @@ class TradingController < ApplicationController
       # Limit prompt size to prevent token bloat (max 2000 characters ≈ 500 tokens)
       max_prompt_length = ENV.fetch('AI_MAX_PROMPT_LENGTH', '2000').to_i
       if user_prompt.length > max_prompt_length
-        user_prompt = user_prompt[0..max_prompt_length - 1] + '... [truncated]'
-        stream_event('progress', { message: "⚠️ Prompt truncated to #{max_prompt_length} characters to optimize performance" })
+        user_prompt = user_prompt[0..(max_prompt_length - 1)] + '... [truncated]'
+        stream_event('progress',
+                     { message: "⚠️ Prompt truncated to #{max_prompt_length} characters to optimize performance" })
       end
 
       stream_technical_analysis(user_prompt)
@@ -240,70 +243,6 @@ class TradingController < ApplicationController
     }
   rescue StandardError => e
     render json: { error: e.message }, status: :internal_server_error
-  end
-
-  private
-
-  def stream_trading_agent(user_prompt)
-    progress_callback = lambda do |event_type, payload|
-      stream_event(event_type, payload)
-    end
-
-    agent = DhanTradingAgent.new(prompt: user_prompt, progress_callback: progress_callback)
-    result = agent.execute
-
-    stream_event('result', {
-      type: result[:type].to_s,
-      message: result[:message],
-      formatted: result[:formatted]
-    })
-  end
-
-  def stream_technical_analysis(user_prompt)
-    stream_event('start', { message: 'Technical Analysis Agent started' })
-    stream_event('mode', { mode: 'technical_analysis' })
-
-    accumulated_response = ''
-
-    begin
-      Services::Ai::TechnicalAnalysisAgent.analyze(query: user_prompt, stream: true) do |chunk|
-        next unless chunk.present?
-
-        # TechnicalAnalysisAgent streams string chunks directly
-        if chunk.is_a?(String)
-          # Detect if this is a progress message (starts with emoji indicators)
-          if chunk.match?(/^[🔍📊🤔🔧⚙️✅📋💭⚠️❌🏁]/)
-            # This is a progress/log message - send to progress sidebar
-            stream_event('progress', { message: chunk.strip })
-          else
-            # This is actual content - accumulate and stream
-            accumulated_response += chunk
-            stream_event('content', { content: chunk })
-          end
-        end
-      end
-
-      # Final result
-      stream_event('result', {
-        type: 'success',
-        message: accumulated_response,
-        formatted: accumulated_response
-      })
-    rescue StandardError => e
-      Rails.logger.error("[TechnicalAnalysisAgent] Error: #{e.class} - #{e.message}")
-      Rails.logger.error(e.backtrace.join("\n"))
-      stream_event('error', { message: "Analysis failed: #{e.message}" })
-    end
-  end
-
-  def stream_event(event_type, payload)
-    return if @stream_client_closed
-
-    event = { type: event_type.to_s, data: payload }
-    response.stream.write("data: #{event.to_json}\n\n")
-    response.stream.flush if response.stream.respond_to?(:flush)
-  rescue IOError, ActionController::Live::ClientDisconnected
-    @stream_client_closed = true
   end
 
   def historical
@@ -349,5 +288,114 @@ class TradingController < ApplicationController
     end
   rescue StandardError => e
     render json: { error: e.message }, status: :bad_gateway
+  end
+
+  private
+
+  def stream_trading_agent(user_prompt)
+    progress_callback = lambda do |event_type, payload|
+      stream_event(event_type, payload)
+    end
+
+    agent = DhanTradingAgent.new(prompt: user_prompt, progress_callback: progress_callback)
+    result = agent.execute
+
+    stream_event('result', {
+                   type: result[:type].to_s,
+                   message: result[:message],
+                   formatted: result[:formatted]
+                 })
+  end
+
+  def stream_technical_analysis(user_prompt)
+    stream_event('start', { message: 'Technical Analysis Agent started' })
+    stream_event('mode', { mode: 'technical_analysis' })
+
+    accumulated_response = ''
+
+    begin
+      Services::Ai::TechnicalAnalysisAgent.analyze(query: user_prompt, stream: true) do |chunk|
+        next unless chunk.present?
+
+        # TechnicalAnalysisAgent streams string chunks directly
+        if chunk.is_a?(String)
+          # Detect if this is a progress message (starts with emoji indicators)
+          if chunk.match?(/^[🔍📊🤔🔧⚙️✅📋💭⚠❌🏁]/)
+            # This is a progress/log message - send to progress sidebar
+            stream_event('progress', { message: chunk.strip })
+          else
+            # This is actual content - accumulate and stream
+            accumulated_response += chunk
+            stream_event('content', { content: chunk })
+          end
+        end
+      end
+
+      # Final result
+      stream_event('result', {
+                     type: 'success',
+                     message: accumulated_response,
+                     formatted: accumulated_response
+                   })
+    rescue StandardError => e
+      Rails.logger.error("[TechnicalAnalysisAgent] Error: #{e.class} - #{e.message}")
+      Rails.logger.error(e.backtrace.join("\n"))
+      stream_event('error', { message: "Analysis failed: #{e.message}" })
+    end
+  end
+
+  def stream_event(event_type, payload)
+    return if @stream_client_closed
+
+    event = { type: event_type.to_s, data: payload }
+    response.stream.write("data: #{event.to_json}\n\n")
+    response.stream.flush if response.stream.respond_to?(:flush)
+  rescue IOError, ActionController::Live::ClientDisconnected
+    @stream_client_closed = true
+  end
+
+  def trading_examples
+    Rails.cache.fetch('trading_examples', expires_in: 1.hour) do
+      [
+        {
+          category: '📊 Market Data',
+          examples: [
+            'What is the current price of RELIANCE?',
+            'Get the LTP for NIFTY and TCS',
+            'What is the OHLC data for INFY?',
+            'Show me historical price data for RELIANCE for the last 7 days'
+          ]
+        },
+        {
+          category: '📈 Technical Analysis',
+          examples: [
+            'Analyze NIFTY with technical indicators',
+            'What is the current RSI for RELIANCE?',
+            'Calculate MACD for TCS on 15-minute timeframe',
+            'What is the ADX value for INFY?',
+            'Calculate ATR for RELIANCE',
+            'What is the Bollinger Bands for TCS?'
+          ]
+        },
+        {
+          category: '💰 Account & Positions',
+          examples: [
+            'What are my current positions?',
+            'Show me account balance',
+            'What is my portfolio value?',
+            'Get my trading statistics'
+          ]
+        },
+        {
+          category: '🔍 Complex Analysis',
+          examples: [
+            'Analyze RELIANCE: get RSI, MACD, and current price',
+            'Compare TCS and INFY: show RSI, ADX, and current prices',
+            'Full analysis for RELIANCE: indicators and historical data',
+            'What is the market condition for TCS? Check indicators'
+          ]
+        }
+      ]
+    end
   end
 end

@@ -31,7 +31,7 @@ class TechnicalAnalysisJob < ApplicationJob
     end
   end
 
-  def perform(job_id, query, use_react: true)
+  def perform(job_id, query, use_react: true, model: nil)
     Rails.logger.info("[TechnicalAnalysisJob] Starting analysis for job #{job_id}")
 
     # Initialize event storage
@@ -47,12 +47,22 @@ class TechnicalAnalysisJob < ApplicationJob
 
     begin
       # Execute analysis with streaming callbacks
-      Services::Ai::TechnicalAnalysisAgent.analyze(query: query, stream: true, use_react: use_react) do |chunk|
+      Services::Ai::TechnicalAnalysisAgent.analyze(query: query, stream: true, use_react: use_react, model: model) do |chunk|
         next unless chunk.present?
 
         if chunk.is_a?(String)
-          # Detect if this is a progress message
-          if chunk.match?(/^[🔍📊🤔🔧⚙️✅📋💭⚠️❌🏁]/)
+          # Detect if this is a progress message (short single-line status updates)
+          # Progress messages are typically short and end with newline, formatted results are multi-line
+          is_progress = chunk.match?(/^[🔍📊🤔🔧⚙️✅📋💭⚠️❌🏁]/) &&
+                       (chunk.lines.length <= 2) &&
+                       !chunk.include?('**Analysis Result**') &&
+                       !chunk.include?('**Instrument:**') &&
+                       !chunk.include?('**Current Price:**') &&
+                       !chunk.include?('**Trend:**') &&
+                       !chunk.include?('**Verdict:**') &&
+                       !chunk.include?('**Recommendation:**')
+
+          if is_progress
             # Progress message - send to progress channel
             progress_event = { type: 'progress', data: { message: chunk.strip }, id: event_id }
             event_id += 1
