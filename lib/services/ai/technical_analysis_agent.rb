@@ -9,6 +9,7 @@ require_relative 'technical_analysis_agent/learning'
 require_relative 'technical_analysis_agent/tool_registry'
 require_relative 'technical_analysis_agent/tool_executor'
 require_relative 'technical_analysis_agent/conversation_executor'
+require_relative 'technical_analysis_agent/planning_executor'
 require_relative 'technical_analysis_agent/tools'
 
 module Services
@@ -23,11 +24,12 @@ module Services
       include ToolRegistry
       include ToolExecutor
       include ConversationExecutor
+      include PlanningExecutor
       include Tools
 
       class << self
-        def analyze(query:, stream: false, &)
-          new.analyze(query: query, stream: stream, &)
+        def analyze(query:, stream: false, use_planning: true, &)
+          new.analyze(query: query, stream: stream, use_planning: use_planning, &)
         end
       end
 
@@ -41,7 +43,7 @@ module Services
         @learned_patterns = load_learned_patterns # Load learned patterns from storage
       end
 
-      def analyze(query:, stream: false, &)
+      def analyze(query:, stream: false, use_planning: true, &)
         return nil unless @client.enabled?
 
         # Clear caches for new conversation
@@ -51,6 +53,16 @@ module Services
         @error_history = []
         @current_query_keywords = extract_keywords(query) # Store for error learning
 
+        # Use planning mode by default (smaller prompts, better performance)
+        # Can be disabled via use_planning: false or AI_USE_PLANNING=false
+        use_planning = ENV.fetch('AI_USE_PLANNING', use_planning ? 'true' : 'false') == 'true' if use_planning.nil?
+
+        if use_planning
+          # Planning-based execution: Plan → Execute → Synthesize
+          return execute_planning_loop(query: query, stream: stream, &)
+        end
+
+        # Legacy conversation-based execution (fallback)
         # Build system prompt with available tools
         system_prompt = build_system_prompt
 
@@ -58,7 +70,7 @@ module Services
         max_query_length = ENV.fetch('AI_MAX_QUERY_LENGTH', '2000').to_i
         if query.length > max_query_length
           Rails.logger.warn("[TechnicalAnalysisAgent] User query truncated from #{query.length} to #{max_query_length} characters")
-          query = query[0..max_query_length - 1] + '... [truncated]'
+          query = query[(0)..(max_query_length - 1)] + '... [truncated]'
         end
 
         # Add current date context to user query
@@ -70,7 +82,7 @@ module Services
           learned_context = build_learned_context
           # Limit learned context to prevent bloat (max 500 chars)
           if learned_context.present? && learned_context.length > 500
-            learned_context = learned_context[0..500] + '... [truncated]'
+            learned_context = learned_context[(0)..(500)] + '... [truncated]'
           end
           system_prompt += "\n\n#{learned_context}" if learned_context.present?
         end
@@ -82,8 +94,8 @@ module Services
           Rails.logger.warn("[TechnicalAnalysisAgent] Large initial prompt detected: ~#{estimated_tokens} tokens (max: #{max_tokens}). This may cause slow responses.")
           # Truncate system prompt if extremely large
           if system_prompt.length > 5000
-            system_prompt = system_prompt[0..5000] + '... [system prompt truncated]'
-            Rails.logger.warn("[TechnicalAnalysisAgent] System prompt truncated to 5000 characters")
+            system_prompt = system_prompt[(0)..(5000)] + '... [system prompt truncated]'
+            Rails.logger.warn('[TechnicalAnalysisAgent] System prompt truncated to 5000 characters')
           end
         end
 
@@ -100,9 +112,6 @@ module Services
                 else
                   'gpt-4o'
                 end
-
-        # No max_iterations limit - agent will iterate until it provides a final analysis
-        # Safety limits are built into execute_conversation methods
 
         # Execute conversation with function calling
         if stream && block_given?

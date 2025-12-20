@@ -29,6 +29,7 @@ Rails.application.routes.draw do
   post '/trading/agent', to: 'trading#agent' # AI Agent endpoint
   post '/trading/agent_stream', to: 'trading#agent_stream' # AI Agent streaming endpoint
   post '/trading/technical_analysis_stream', to: 'trading#technical_analysis_stream' # Technical Analysis Agent streaming endpoint
+  get '/trading/technical_analysis_status/:job_id', to: 'trading#technical_analysis_status' # Status endpoint for polling fallback
 
   # DhanHQ Market Data API (reliable wrapper)
   namespace :dhan do

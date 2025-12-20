@@ -152,6 +152,48 @@ class TradingController < ApplicationController
   end
 
   def technical_analysis_stream
+    # Check if background execution is enabled (default: true to avoid blocking)
+    use_background = params[:background] != 'false' && ENV.fetch('AI_USE_BACKGROUND_JOBS', 'true') == 'true'
+
+    if use_background
+      # Background execution via ActiveJob (non-blocking)
+      technical_analysis_background
+    else
+      # Direct streaming (blocks web server - use only if background is disabled)
+      technical_analysis_stream_direct
+    end
+  end
+
+  def technical_analysis_background
+    user_prompt = params[:prompt].to_s
+    if user_prompt.blank?
+      render json: { error: 'Prompt cannot be blank' }, status: :unprocessable_entity
+      return
+    end
+
+    # Limit prompt size
+    max_prompt_length = ENV.fetch('AI_MAX_PROMPT_LENGTH', '2000').to_i
+    if user_prompt.length > max_prompt_length
+      user_prompt = user_prompt[0..max_prompt_length - 1] + '... [truncated]'
+    end
+
+    # Generate unique job ID
+    job_id = SecureRandom.uuid
+
+    # Enqueue background job (non-blocking)
+    use_planning = params[:use_planning] != 'false'
+    TechnicalAnalysisJob.perform_later(job_id, user_prompt, use_planning: use_planning)
+
+    # Return job ID immediately (non-blocking)
+    render json: {
+      job_id: job_id,
+      status: 'queued',
+      message: 'Analysis started in background. Connect to ActionCable channel for updates.',
+      channel: "technical_analysis_#{job_id}"
+    }
+  end
+
+  def technical_analysis_stream_direct
     response.headers['Content-Type'] = 'text/event-stream'
     response.headers['Cache-Control'] = 'no-cache'
     response.headers['X-Accel-Buffering'] = 'no'
@@ -177,6 +219,27 @@ class TradingController < ApplicationController
     ensure
       response.stream.close
     end
+  end
+
+  def technical_analysis_status
+    job_id = params[:job_id]
+    last_event = params[:last_event]&.to_i || 0
+
+    # Get events from cache (stored by background job)
+    cache_key = "technical_analysis_#{job_id}"
+    events_data = Rails.cache.read(cache_key) || { events: [], last_event_id: 0, status: 'running' }
+
+    # Return only new events
+    new_events = events_data[:events].select { |e| e[:id] > last_event }
+
+    render json: {
+      job_id: job_id,
+      status: events_data[:status] || 'running',
+      events: new_events,
+      last_event_id: events_data[:last_event_id] || 0
+    }
+  rescue StandardError => e
+    render json: { error: e.message }, status: :internal_server_error
   end
 
   private

@@ -82,6 +82,11 @@ module DhanTradingAgentTools
     end.join("\n")
   end
 
+  # Get all available tools
+  def self.all
+    ALL_TOOLS.values.flatten
+  end
+
   # Get available tools based on user role/intent
   def self.get_tools_for_intent(intent)
     case intent

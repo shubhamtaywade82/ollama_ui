@@ -1,5 +1,6 @@
 import { Controller } from "@hotwired/stimulus";
 import { marked } from "marked";
+import { createConsumer } from "@rails/actioncable";
 
 marked.setOptions({
   breaks: true,
@@ -26,11 +27,25 @@ export default class extends Controller {
     this.agentMode = 'trading'; // 'trading' or 'technical_analysis'
     this.currentProgressLog = null;
     this.progressEntries = [];
+    this.cable = null; // ActionCable consumer
+    this.channel = null; // Current channel subscription
     this.loadAccountInfo();
     this.setupTextareaEnterHandler();
     this.setupTextareaAutoResize();
     this.updateModeButtons();
     this.initializeProgressSidebar();
+  }
+
+  disconnect() {
+    // Clean up ActionCable connection
+    if (this.channel) {
+      this.channel.unsubscribe();
+      this.channel = null;
+    }
+    if (this.cable) {
+      this.cable.disconnect();
+      this.cable = null;
+    }
   }
 
   initializeProgressSidebar() {
@@ -252,9 +267,13 @@ export default class extends Controller {
   }
 
   async streamAgent(prompt) {
-    const endpoint = this.agentMode === 'technical_analysis'
-      ? "/trading/technical_analysis_stream"
-      : "/trading/agent_stream";
+    // For technical analysis, use background jobs by default
+    if (this.agentMode === 'technical_analysis') {
+      return this.streamTechnicalAnalysisBackground(prompt);
+    }
+
+    // For trading agent, use direct streaming
+    const endpoint = "/trading/agent_stream";
 
     const res = await fetch(endpoint, {
       method: "POST",
@@ -317,6 +336,132 @@ export default class extends Controller {
     return completed;
   }
 
+  async streamTechnicalAnalysisBackground(prompt) {
+    // Start background job
+    const res = await fetch("/trading/technical_analysis_stream", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": this.csrf(),
+      },
+      body: JSON.stringify({ prompt, mode: this.agentMode, background: true }),
+    });
+
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ error: "Failed to start analysis" }));
+      this.appendProgressLog(`Error: ${error.error || "Failed to start analysis"}`, "error");
+      return false;
+    }
+
+    const data = await res.json();
+    const jobId = data.job_id;
+    const channelName = data.channel || `technical_analysis_${jobId}`;
+
+    this.appendProgressLog("Analysis queued. Connecting to updates...", "info");
+
+    // Connect to ActionCable channel (with polling fallback)
+    try {
+      return this.connectToActionCable(channelName, jobId);
+    } catch (err) {
+      console.warn("ActionCable not available, using polling fallback:", err);
+      return this.pollForUpdates(jobId);
+    }
+  }
+
+  connectToActionCable(channelName, jobId) {
+    return new Promise((resolve, reject) => {
+      try {
+        // Create consumer if not exists
+        if (!this.cable) {
+          this.cable = createConsumer();
+        }
+
+        // Subscribe to channel
+        this.channel = this.cable.subscriptions.create(
+          {
+            channel: "TechnicalAnalysisChannel",
+            job_id: jobId
+          },
+          {
+            connected: () => {
+              this.appendProgressLog("Connected to analysis stream", "success");
+            },
+            received: (data) => {
+              const outcome = this.handleAgentEvent(data);
+              if (outcome === "done") {
+                if (this.channel) {
+                  this.channel.unsubscribe();
+                  this.channel = null;
+                }
+                resolve(true);
+              } else if (outcome === "error") {
+                if (this.channel) {
+                  this.channel.unsubscribe();
+                  this.channel = null;
+                }
+                reject(new Error(data?.data?.message || "Analysis failed"));
+              }
+            },
+            disconnected: () => {
+              this.appendProgressLog("Disconnected from analysis stream", "muted");
+            }
+          }
+        );
+      } catch (err) {
+        console.error("ActionCable connection error:", err);
+        // Fallback to polling
+        this.pollForUpdates(jobId).then(resolve).catch(reject);
+      }
+    });
+  }
+
+  async pollForUpdates(jobId) {
+    // Fallback polling mechanism if ActionCable not available
+    this.appendProgressLog("Using polling mode (ActionCable not available)", "muted");
+
+    const maxAttempts = 300; // 5 minutes max (1 second intervals)
+    let attempts = 0;
+    let lastEventId = 0;
+
+    while (attempts < maxAttempts) {
+      await new Promise(resolve => setTimeout(resolve, 1000)); // Poll every second
+      attempts++;
+
+      try {
+        const res = await fetch(`/trading/technical_analysis_status/${jobId}?last_event=${lastEventId}`, {
+          headers: {
+            "X-CSRF-Token": this.csrf(),
+          },
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.events && data.events.length > 0) {
+            for (const event of data.events) {
+              const outcome = this.handleAgentEvent(event);
+              if (outcome === "done") {
+                return true;
+              }
+              if (outcome === "error") {
+                throw new Error(event?.data?.message || "Analysis failed");
+              }
+            }
+            lastEventId = data.last_event_id || lastEventId;
+          }
+
+          if (data.status === 'completed' || data.status === 'failed') {
+            return data.status === 'completed';
+          }
+        }
+      } catch (err) {
+        console.error("Polling error:", err);
+      }
+    }
+
+    this.appendProgressLog("Polling timeout - analysis may still be running", "warning");
+    return false;
+  }
+
   appendProgressLog(message, variant = "muted") {
     if (!message) return;
 
@@ -337,16 +482,10 @@ export default class extends Controller {
     entry.className = `${this.progressVariantClass(variant)} flex items-start gap-2 py-1`;
     entry.style.whiteSpace = "pre-line";
 
-    const timeSpan = document.createElement("span");
-    timeSpan.className = "text-xs text-gray-400 flex-shrink-0";
-    timeSpan.style.color = "var(--text-secondary)";
-    timeSpan.textContent = new Date().toLocaleTimeString();
-
     const messageSpan = document.createElement("span");
     messageSpan.className = "flex-1";
     messageSpan.textContent = message;
 
-    entry.appendChild(timeSpan);
     entry.appendChild(messageSpan);
     this.currentProgressLog.appendChild(entry);
 
