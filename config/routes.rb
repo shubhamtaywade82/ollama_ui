@@ -28,6 +28,7 @@ Rails.application.routes.draw do
   get '/trading/historical', to: 'trading#historical'
   post '/trading/agent', to: 'trading#agent' # AI Agent endpoint
   post '/trading/agent_stream', to: 'trading#agent_stream' # AI Agent streaming endpoint
+  post '/trading/technical_analysis_stream', to: 'trading#technical_analysis_stream' # Technical Analysis Agent streaming endpoint
 
   # DhanHQ Market Data API (reliable wrapper)
   namespace :dhan do

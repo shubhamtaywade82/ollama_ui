@@ -125,40 +125,122 @@ class TradingController < ApplicationController
   def agent_stream
     response.headers['Content-Type'] = 'text/event-stream'
     response.headers['Cache-Control'] = 'no-cache'
+    response.headers['X-Accel-Buffering'] = 'no'
+    @stream_client_closed = false
+
     begin
       user_prompt = params[:prompt].to_s
-      runner = Trading::AgentRunner.new(goal: user_prompt)
-      result = runner.run
+      agent_mode = params[:mode] || 'trading' # 'trading' or 'technical_analysis'
 
-      result[:steps].each do |step|
-        sse_payload = {
-          type: 'step',
-          data: {
-            step: step[:step],
-            tool_call: step[:tool_call],
-            observation: step[:observation],
-            requested_at: step[:requested_at]
-          }
-        }
-        response.stream.write("data: #{sse_payload.to_json}\n\n")
+      if user_prompt.blank?
+        stream_event('error', { message: 'Prompt cannot be blank' })
+        return
       end
 
-      final_event = {
-        type: 'done',
-        data: {
-          ok: result[:ok],
-          steps_taken: result[:steps_taken],
-          note: result[:note],
-          goal: result[:goal]
-        }
-      }
-      response.stream.write("data: #{final_event.to_json}\n\n")
+      if agent_mode == 'technical_analysis'
+        # Use TechnicalAnalysisAgent
+        stream_technical_analysis(user_prompt)
+      else
+        # Use DhanTradingAgent (default)
+        stream_trading_agent(user_prompt)
+      end
     rescue StandardError => e
-      error_event = { type: 'error', data: { error: e.message } }
-      response.stream.write("data: #{error_event.to_json}\n\n")
+      stream_event('error', { message: e.message })
     ensure
       response.stream.close
     end
+  end
+
+  def technical_analysis_stream
+    response.headers['Content-Type'] = 'text/event-stream'
+    response.headers['Cache-Control'] = 'no-cache'
+    response.headers['X-Accel-Buffering'] = 'no'
+    @stream_client_closed = false
+
+    begin
+      user_prompt = params[:prompt].to_s
+      if user_prompt.blank?
+        stream_event('error', { message: 'Prompt cannot be blank' })
+        return
+      end
+
+      # Limit prompt size to prevent token bloat (max 2000 characters ≈ 500 tokens)
+      max_prompt_length = ENV.fetch('AI_MAX_PROMPT_LENGTH', '2000').to_i
+      if user_prompt.length > max_prompt_length
+        user_prompt = user_prompt[0..max_prompt_length - 1] + '... [truncated]'
+        stream_event('progress', { message: "⚠️ Prompt truncated to #{max_prompt_length} characters to optimize performance" })
+      end
+
+      stream_technical_analysis(user_prompt)
+    rescue StandardError => e
+      stream_event('error', { message: e.message })
+    ensure
+      response.stream.close
+    end
+  end
+
+  private
+
+  def stream_trading_agent(user_prompt)
+    progress_callback = lambda do |event_type, payload|
+      stream_event(event_type, payload)
+    end
+
+    agent = DhanTradingAgent.new(prompt: user_prompt, progress_callback: progress_callback)
+    result = agent.execute
+
+    stream_event('result', {
+      type: result[:type].to_s,
+      message: result[:message],
+      formatted: result[:formatted]
+    })
+  end
+
+  def stream_technical_analysis(user_prompt)
+    stream_event('start', { message: 'Technical Analysis Agent started' })
+    stream_event('mode', { mode: 'technical_analysis' })
+
+    accumulated_response = ''
+
+    begin
+      Services::Ai::TechnicalAnalysisAgent.analyze(query: user_prompt, stream: true) do |chunk|
+        next unless chunk.present?
+
+        # TechnicalAnalysisAgent streams string chunks directly
+        if chunk.is_a?(String)
+          # Detect if this is a progress message (starts with emoji indicators)
+          if chunk.match?(/^[🔍📊🤔🔧⚙️✅📋💭⚠️❌🏁]/)
+            # This is a progress/log message - send to progress sidebar
+            stream_event('progress', { message: chunk.strip })
+          else
+            # This is actual content - accumulate and stream
+            accumulated_response += chunk
+            stream_event('content', { content: chunk })
+          end
+        end
+      end
+
+      # Final result
+      stream_event('result', {
+        type: 'success',
+        message: accumulated_response,
+        formatted: accumulated_response
+      })
+    rescue StandardError => e
+      Rails.logger.error("[TechnicalAnalysisAgent] Error: #{e.class} - #{e.message}")
+      Rails.logger.error(e.backtrace.join("\n"))
+      stream_event('error', { message: "Analysis failed: #{e.message}" })
+    end
+  end
+
+  def stream_event(event_type, payload)
+    return if @stream_client_closed
+
+    event = { type: event_type.to_s, data: payload }
+    response.stream.write("data: #{event.to_json}\n\n")
+    response.stream.flush if response.stream.respond_to?(:flush)
+  rescue IOError, ActionController::Live::ClientDisconnected
+    @stream_client_closed = true
   end
 
   def historical

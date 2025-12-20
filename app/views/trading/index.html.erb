@@ -13,6 +13,23 @@
         <div>
           <h1 class="text-lg font-semibold" data-theme-text-primary style="color: var(--text-primary);">Trading Assistant</h1>
           <p class="text-xs" data-theme-text-secondary style="color: var(--text-secondary);" data-trading-chat-target="accountInfo">Connecting to broker...</p>
+          <!-- Agent Mode Selector -->
+          <div class="flex gap-2 mt-2" data-trading-chat-target="modeSelector">
+            <button data-action="click->trading-chat#switchMode" data-mode="trading"
+              class="px-2 py-1 text-xs rounded-md transition"
+              data-theme-bg-tertiary
+              style="background-color: var(--bg-tertiary); color: var(--text-primary);"
+              data-trading-chat-target="tradingModeBtn">
+              Trading Agent
+            </button>
+            <button data-action="click->trading-chat#switchMode" data-mode="technical_analysis"
+              class="px-2 py-1 text-xs rounded-md transition opacity-60"
+              data-theme-bg-tertiary
+              style="background-color: var(--bg-tertiary); color: var(--text-primary);"
+              data-trading-chat-target="technicalAnalysisModeBtn">
+              Technical Analysis
+            </button>
+          </div>
         </div>
       </div>
       <div class="flex items-center gap-4">
@@ -62,9 +79,25 @@
     </div>
   </header>
 
-  <!-- Chat Messages -->
-  <div class="flex-1 overflow-y-auto" data-trading-chat-target="messagesContainer" style="background-color: var(--bg-primary);">
-    <div class="max-w-4xl mx-auto px-4 py-6" data-trading-chat-target="messages">
+  <!-- Main Content Area with Sidebar -->
+  <div class="flex-1 flex overflow-hidden" style="background-color: var(--bg-primary);">
+    <!-- Left Sidebar - Agent Progress -->
+    <div class="w-80 border-r flex flex-col" data-theme-bg-secondary style="border-color: var(--border-color); background-color: var(--bg-secondary);" data-trading-chat-target="progressSidebar">
+      <div class="p-4 border-b" style="border-color: var(--border-color);">
+        <h2 class="text-sm font-semibold" data-theme-text-primary style="color: var(--text-primary);">Agent Progress</h2>
+        <p class="text-xs mt-1" data-theme-text-secondary style="color: var(--text-secondary);">Live execution details</p>
+      </div>
+      <div class="flex-1 overflow-y-auto p-4" data-trading-chat-target="progressContainer">
+        <div class="text-xs text-center text-gray-400 py-8" data-theme-text-secondary style="color: var(--text-secondary);">
+          Agent progress will appear here when processing requests...
+        </div>
+        <div data-trading-chat-target="progressLog" class="space-y-2"></div>
+      </div>
+    </div>
+
+    <!-- Right Side - Chat Messages -->
+    <div class="flex-1 overflow-y-auto" data-trading-chat-target="messagesContainer" style="background-color: var(--bg-primary);">
+      <div class="max-w-4xl mx-auto px-4 py-6" data-trading-chat-target="messages">
       <div class="mb-4 flex justify-start">
         <div class="flex gap-3 max-w-[85%]">
           <div class="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center" data-theme-accent style="background-color: var(--accent-primary);">
@@ -78,11 +111,13 @@
                 <li>💰 View account balance, positions & holdings</li>
                 <li>📈 Track portfolio performance</li>
                 <li>💡 Get trading insights</li>
+                <li>📉 Advanced technical analysis with indicators (RSI, MACD, ADX, Supertrend)</li>
               </ul>
-              <p><em>Try: "Get quote for RELIANCE" or "Show my holdings"</em></p>
+              <p><em>Try: "Get quote for RELIANCE" or "Analyze NIFTY with technical indicators"</em></p>
             </div>
           </div>
         </div>
+      </div>
       </div>
     </div>
   </div>

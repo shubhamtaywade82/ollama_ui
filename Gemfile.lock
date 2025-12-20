@@ -70,6 +70,8 @@ GEM
       activemodel (= 8.0.4)
       activesupport (= 8.0.4)
       timeout (>= 0.4.0)
+    activerecord-import (2.2.0)
+      activerecord (>= 4.2)
     activestorage (8.0.4)
       actionpack (= 8.0.4)
       activejob (= 8.0.4)
@@ -467,6 +469,7 @@ PLATFORMS
 
 DEPENDENCIES
   DhanHQ!
+  activerecord-import
   bootsnap
   brakeman
   debug

@@ -2,79 +2,121 @@
 
 # AI Trading Agent that interprets user commands using LLM and executes DhanHQ operations
 class DhanTradingAgent
-  def initialize(prompt:)
+  def initialize(prompt:, progress_callback: nil)
     @prompt = prompt
     @user_prompt = prompt.downcase
+    @progress_callback = progress_callback
+    @progress_step_counter = 0
   end
 
   # Main method to process user prompt and return response
   def execute
     Rails.logger.info "🎯 DhanTradingAgent.execute: '#{@prompt}'"
 
+    emit(:start, { prompt: @prompt })
+
     # Check if we need iterative refinement for complex tasks
     if requires_iteration?
       Rails.logger.info '📋 Using iterative agent'
-      return execute_with_iteration
+      emit(:mode, { mode: 'iterative' })
+      result = execute_with_iteration
+    else
+      emit(:mode, { mode: 'direct' })
+      emit(:thinking, { message: 'Selecting the best tool for your request…' })
+
+      intent = understand_intent
+      emit(:intent, sanitize_intent(intent))
+      Rails.logger.info "🧠 Intent: tool=#{intent[:tool]}, action=#{intent[:action]}, symbol=#{intent[:symbol]}"
+
+      result =
+        if option_chain_requested?(intent)
+        Rails.logger.info '🔁 Escalating to iterative workflow for option chain request'
+        emit(:mode, { mode: 'iterative' })
+          execute_with_iteration
+        else
+          execute_direct_intent(intent)
+        end
     end
-
-    # Use AI to select tool
-    intent = understand_intent
-    Rails.logger.info "🧠 Intent: tool=#{intent[:tool]}, action=#{intent[:action]}, symbol=#{intent[:symbol]}"
-
-    # Execute based on selected tool
-    result = if intent[:tool]
-               Rails.logger.info "🔧 Executing tool: #{intent[:tool]}"
-               case intent[:tool].to_sym
-               when :account_balance
-                 get_account_balance
-               when :positions
-                 get_positions
-               when :holdings
-                 get_holdings
-               else
-                 execute_with_tool(intent[:tool], intent[:params])
-               end
-             elsif intent[:action]
-               Rails.logger.info "⚡ Executing action: #{intent[:action]}"
-               # Fallback to action-based routing
-               case intent[:action]
-               when :account_balance
-                 get_account_balance
-               when :positions
-                 get_positions
-               when :holdings
-                 get_holdings
-               when :quote
-                 get_quote_details(intent[:symbol])
-               when :historical_data
-                 get_historical_data(intent[:symbol], intent[:timeframe], intent[:interval])
-               when :instrument_search
-                 search_instrument(intent[:symbol])
-               else
-                 # Try direct quote detection as fallback
-                 if @user_prompt.match?(/\b(quote|price|ltp|last price|current price)\b/) && extract_symbol_from_prompt
-                   Rails.logger.info '🎯 Fallback: Direct quote detection'
-                   get_quote_details
-                 else
-                   general_help
-                 end
-               end
-             else
-               # Try direct quote detection as final fallback
-               Rails.logger.info '🔄 Final fallback: Checking for quote request'
-               if @user_prompt.match?(/\b(quote|price|ltp|last price|current price)\b/) && extract_symbol_from_prompt
-                 symbol = extract_symbol_from_prompt
-                 Rails.logger.info "✅ Detected quote for symbol: #{symbol}"
-                 get_quote_details
-               else
-                 Rails.logger.warn '⚠️ No intent matched, returning help'
-                 general_help
-               end
-             end
 
     Rails.logger.info "📤 Result type: #{result.class}, has keys: #{result.is_a?(Hash) ? result.keys.inspect : 'N/A'}"
 
-    # Ensure result has required fields
+    result = ensure_result_shape(result)
+    return result if result[:type] == :error && result[:formatted].present?
+
+    emit(:thinking, { message: 'Summarizing result for display…' })
+    finalize_result(result)
+  rescue StandardError => e
+    Rails.logger.error "❌ DhanTradingAgent.execute failed: #{e.message}\n#{e.backtrace.first(5).join("\n")}"
+    error_response("Execution failed: #{e.message}")
+  end
+
+  def execute_direct_intent(intent)
+    intent ||= {}
+
+    step_info = build_step_info(intent)
+    emit(:plan, { plan: [step_info] }) if step_info
+    emit(:step_started, { step: step_info }) if step_info
+
+    result = if intent[:tool]
+               Rails.logger.info "🔧 Executing tool: #{intent[:tool]}"
+               handle_tool_intent(intent)
+             elsif intent[:action]
+               Rails.logger.info "⚡ Executing action: #{intent[:action]}"
+               handle_action_intent(intent)
+             else
+               Rails.logger.info '🔄 Final fallback: Checking for quote request'
+               handle_fallback_intent
+             end
+
+    emit_step_result(step_info, result)
+    result
+  end
+
+  def handle_tool_intent(intent)
+    case intent[:tool].to_sym
+    when :account_balance
+      get_account_balance
+    when :positions
+      get_positions
+    when :holdings
+      get_holdings
+    else
+      execute_with_tool(intent[:tool], intent[:params])
+    end
+  end
+
+  def handle_action_intent(intent)
+    case intent[:action]
+    when :account_balance
+      get_account_balance
+    when :positions
+      get_positions
+    when :holdings
+      get_holdings
+    when :quote
+      get_quote_details(intent[:symbol])
+    when :historical_data
+      get_historical_data(intent[:symbol], intent[:timeframe], intent[:interval])
+    when :instrument_search
+      search_instrument(intent[:symbol])
+    else
+      handle_fallback_intent
+    end
+  end
+
+  def handle_fallback_intent
+    if @user_prompt.match?(/\b(quote|price|ltp|last price|current price)\b/) && extract_symbol_from_prompt
+      symbol = extract_symbol_from_prompt
+      emit(:thinking, { message: "Detected quote request for #{symbol}" })
+      Rails.logger.info "✅ Detected quote for symbol: #{symbol}"
+      get_quote_details
+    else
+      Rails.logger.warn '⚠️ No intent matched, returning help'
+      general_help
+    end
+  end
+
+  def ensure_result_shape(result)
     if result.nil?
       Rails.logger.error '❌ Result is nil!'
       return error_response('Unexpected error: no result returned')
@@ -85,13 +127,17 @@ class DhanTradingAgent
       return error_response('Result format invalid: missing type or formatted')
     end
 
-    # FINAL LLM SUMMARIZATION STEP (only LLM response used)
+    result
+  end
+
+  def finalize_result(result)
     llm_summary = nil
     begin
       llm_summary = llm_summarize_final(@prompt, result[:data])
     rescue StandardError => e
       Rails.logger.error "LLM summarize_final error: #{e.message}"
     end
+
     if llm_summary.present?
       result[:formatted] = llm_summary
     else
@@ -102,10 +148,123 @@ class DhanTradingAgent
       Rails.logger.warn 'LLM failed or returned blank—falling back to raw JSON for :formatted.'
     end
 
+    emit(:summary_ready, { type: result[:type].to_s, message: result[:message] })
     result
+  end
+
+  def emit_step_result(step_info, result)
+    return unless step_info
+
+    summary = summarize_result(result)
+    if summary[:status] == 'error'
+      emit(:step_failed, { step: step_info, error: summary[:summary] })
+    else
+      emit(:step_completed, { step: step_info, result: summary })
+    end
+  end
+
+  def summarize_result(result)
+    case result
+    when Hash
+      if result[:error]
+        { status: 'error', summary: result[:error].to_s }
+      elsif result[:message]
+        { status: 'success', summary: result[:message].to_s }
+      elsif result[:type].to_s == 'error'
+        { status: 'error', summary: truncate_text(result[:formatted].to_s.presence || 'Error occurred') }
+      elsif result[:data]
+        { status: 'success', summary: truncate_text(result[:data].to_s) }
+      else
+        { status: 'success', summary: 'Step completed' }
+      end
+    when DhanHQ::Models::Instrument
+      { status: 'success', summary: "Instrument #{result.symbol_name}" }
+    else
+      { status: 'success', summary: truncate_text(result.to_s) }
+    end
   rescue StandardError => e
-    Rails.logger.error "❌ DhanTradingAgent.execute failed: #{e.message}\n#{e.backtrace.first(5).join("\n")}"
-    error_response("Execution failed: #{e.message}")
+    Rails.logger.warn "Summary generation error: #{e.message}"
+    { status: 'success', summary: 'Step completed' }
+  end
+
+  def truncate_text(text, length = 160)
+    clean = text.to_s
+    return clean if clean.length <= length
+
+    "#{clean[0, length]}…"
+  end
+
+  def build_step_info(intent)
+    @progress_step_counter ||= 0
+    @progress_step_counter += 1
+
+    tool = intent&.[](:tool) || intent&.[](:action) || :analysis
+    description = intent_description(intent, tool)
+
+    info = {
+      number: @progress_step_counter,
+      tool: tool.to_s,
+      description: description
+    }
+
+    info[:symbol] = intent[:symbol] if intent&.key?(:symbol)
+    params = intent&.[](:params)
+    info[:params] = sanitize_for_stream(params) if params.present?
+    info
+  end
+
+  def intent_description(intent, tool)
+    return intent[:description] if intent&.[](:description)
+
+    label = tool ? tool.to_s.tr('_', ' ') : 'process request'
+    label.split.map!(&:capitalize).join(' ')
+  end
+
+  def sanitize_intent(intent)
+    return {} unless intent.is_a?(Hash)
+
+    data = {
+      tool: intent[:tool]&.to_s,
+      action: intent[:action]&.to_s,
+      symbol: intent[:symbol]
+    }
+    data[:params] = sanitize_for_stream(intent[:params]) if intent[:params]
+    data
+  end
+
+  def sanitize_for_stream(value)
+    case value
+    when Hash
+      value.each_with_object({}) do |(k, v), memo|
+        memo[k.to_s] = sanitize_for_stream(v)
+      end
+    when Array
+      value.map { |v| sanitize_for_stream(v) }
+    when DhanHQ::Models::Instrument
+      {
+        symbol: value.symbol_name,
+        exchange: value.exchange_segment,
+        security_id: value.security_id
+      }
+    when BigDecimal
+      value.to_f
+    when Time, ActiveSupport::TimeWithZone, Date, DateTime
+      value.iso8601
+    when Numeric, TrueClass, FalseClass, NilClass
+      value
+    else
+      value.to_s
+    end
+  end
+
+  def emit(event_type, payload = {})
+    return unless @progress_callback
+
+    safe_payload = sanitize_for_stream(payload)
+    @progress_callback.call(event_type.to_s, safe_payload)
+  rescue StandardError => e
+    Rails.logger.debug "Streaming progress failed: #{e.message}"
+    nil
   end
 
   def requires_iteration?
@@ -125,9 +284,17 @@ class DhanTradingAgent
     needs_iteration
   end
 
+  def option_chain_requested?(intent)
+    return true if @user_prompt.include?('option') && @user_prompt.include?('chain')
+
+    tool = intent[:tool].to_s if intent
+    action = intent[:action].to_s if intent
+    [tool, action].compact.any? { |value| value.include?('option_chain') || value.include?('option') }
+  end
+
   def execute_with_iteration
     # Use IntelligentTradingAgent for complex tasks with full reasoning loop
-    agent = IntelligentTradingAgent.new(prompt: @prompt)
+    agent = IntelligentTradingAgent.new(prompt: @prompt, progress_callback: method(:emit))
     result = agent.execute
 
     # Ensure IntelligentTradingAgent result has the expected format
@@ -308,7 +475,7 @@ class DhanTradingAgent
     when :quote_with_analysis
       execute_quote_workflow(params)
     else
-      { type: :error, message: 'Unknown workflow' }
+      error_response('Unknown workflow')
     end
   end
 
@@ -367,12 +534,43 @@ class DhanTradingAgent
   # Normalize symbol parameter to ensure it's a string
   def normalize_symbol(symbol)
     return nil if symbol.nil?
-    return symbol.to_s.upcase if symbol.is_a?(String)
-    return symbol[:symbol].to_s.upcase if symbol.is_a?(Hash) && symbol[:symbol]
-    return symbol['symbol'].to_s.upcase if symbol.is_a?(Hash) && symbol['symbol']
 
-    symbol.to_s.upcase
-  rescue StandardError
+    # Handle Hash
+    if symbol.is_a?(Hash)
+      symbol = symbol[:symbol] || symbol['symbol'] || symbol[:name] || symbol['name']
+      return nil if symbol.nil?
+    end
+
+    # Convert to string and clean
+    symbol_str = symbol.to_s.strip.upcase
+
+    # Common words to exclude
+    common_words = %w[THE EXTRACTED TRADING SYMBOL IS FOR OF AND WITH COLON]
+
+    # Remove common prefixes/suffixes that might be in LLM responses
+    symbol_str = symbol_str.gsub(/^(THE\s+EXTRACTED\s+TRADING\s+SYMBOL\s+IS\s*:?\s*)/i, '')
+    symbol_str = symbol_str.gsub(/^(SYMBOL\s*:?\s*)/i, '')
+    symbol_str = symbol_str.gsub(/^.*?:\s*/i, '') # Remove anything before colon
+    symbol_str = symbol_str.gsub(/\s+(IS|FOR|OF|AND|WITH).*$/i, '')
+
+    # Extract just the symbol if it's embedded in a sentence
+    # Look for uppercase word that looks like a trading symbol (3-12 chars)
+    if symbol_str.include?(' ') || symbol_str.length > 12 || common_words.any? { |word| symbol_str.include?(word) }
+      # Find all potential symbols (uppercase words 3-12 chars)
+      candidates = symbol_str.scan(/\b([A-Z0-9]{3,12})\b/).flatten
+      # Filter out common words and return the first valid symbol
+      symbol_str = candidates.reject { |s| common_words.include?(s) }.first || symbol_str
+    end
+
+    # Final cleanup - remove any remaining non-symbol characters
+    symbol_str = symbol_str.gsub(/[^A-Z0-9]/, '')
+
+    # Validate it's a reasonable symbol (3-12 uppercase letters/numbers)
+    return nil unless symbol_str.match?(/^[A-Z0-9]{3,12}$/)
+
+    symbol_str
+  rescue StandardError => e
+    Rails.logger.error "normalize_symbol failed: #{e.message}"
     nil
   end
 
@@ -394,8 +592,8 @@ class DhanTradingAgent
     {
       type: :success,
       message: "📈 Quote for #{symbol}",
-      data: { quote: quote_data }
-      # formatted: handled by final LLM call.
+      data: { quote: quote_data },
+      formatted: format_quote(instrument, quote_data)
     }
   end
 
@@ -650,7 +848,7 @@ class DhanTradingAgent
 
     # Call Ollama to select tool
     ai_response = OllamaClient.new.chat(
-      model: 'qwen2.5:1.5b-instruct',
+      model: Trading::LlmClient::DEFAULT_MODEL,
       prompt: context
     )
 
@@ -863,7 +1061,7 @@ class DhanTradingAgent
     # LLM fallback extraction with short timeout
     if symbol.blank?
       begin
-        Timeout.timeout(10) do
+        Timeout.timeout(1000) do
           symbol = llm_extract_symbol(@prompt)
         end
       rescue StandardError => e
@@ -882,10 +1080,29 @@ class DhanTradingAgent
     extract_prompt = <<~PROMPT
       User request: "#{prompt}"
       Extract and return ONLY the trading symbol or instrument (e.g. NSE/BSE stocks, futures, indices) in uppercase. If no clear symbol is present, reply with "" (empty string).
+
+      IMPORTANT: Return ONLY the symbol itself (e.g., "RELIANCE", "NIFTY", "TCS"), not a sentence or explanation.
     PROMPT
     result = Trading::LlmClient.new.chat!([{ role: 'user', content: extract_prompt }])
-    s = result.to_s.strip.upcase
-    s.match?(/[A-Z]{3,}/) ? s : nil
+    raw_result = result.to_s.strip
+
+    # Extract symbol from LLM response - handle cases where LLM returns a sentence
+    # Try to find uppercase word that looks like a symbol (3-12 chars, all caps)
+    symbol_match = raw_result.match(/\b([A-Z]{3,12})\b/)
+    if symbol_match
+      symbol = symbol_match[1]
+      # Validate it's not a common word
+      common_words = %w[THE EXTRACTED TRADING SYMBOL IS FOR OF AND WITH]
+      return symbol unless common_words.include?(symbol)
+    end
+
+    # Fallback: try to extract any uppercase word
+    symbols = raw_result.scan(/\b([A-Z0-9]{3,12})\b/).flatten
+    filtered = symbols.reject { |s| %w[THE EXTRACTED TRADING SYMBOL IS FOR OF AND WITH].include?(s) }
+    extracted = filtered.first
+
+    # Normalize the extracted symbol before returning
+    normalize_symbol(extracted) if extracted
   rescue StandardError => e
     Rails.logger.error "LLM symbol extract failed: #{e.message}"
     nil
@@ -1056,6 +1273,7 @@ class DhanTradingAgent
   end
 
   def error_response(message)
+    emit(:error, { message: message })
     {
       type: :error,
       message: message,

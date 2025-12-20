@@ -3,14 +3,18 @@
 # Intelligent Trading Agent with iterative Plan-Execute-Observe-Refine loop
 class IntelligentTradingAgent
   MAX_ITERATIONS = 10
+  KNOWN_SYMBOL_HINTS = %w[NIFTY NIFTY50 BANKNIFTY SENSEX NSE NFO]
 
-  def initialize(prompt:)
+  def initialize(prompt:, progress_callback: nil)
     @prompt = prompt
     @iteration = 0
-    @context = {}  # Stores information gathered during execution
+    @context = {} # Stores information gathered during execution
     @plan = []
     @completed_steps = []
     @current_step_index = 0
+    @progress_callback = progress_callback
+    @step_counter = 0
+    seed_plan_from_prompt
   end
 
   def execute
@@ -24,17 +28,14 @@ class IntelligentTradingAgent
       break if task_complete?
 
       # STEP 1: REASON - Understand what we need to do
-      if @reasoning.nil? || @plan.empty?
-        reason_step
-      end
+      reason_step if @reasoning.nil? || @plan.empty?
 
       # STEP 2: PLAN - Decide next action
-      if @plan.empty?
-        plan_next_step
-      end
+      plan_next_step if @plan.empty?
 
       # STEP 3: EXECUTE - Perform the action
       break if @current_step_index >= @plan.length
+
       execute_current_step
 
       # STEP 4: OBSERVE - Analyze results
@@ -51,10 +52,91 @@ class IntelligentTradingAgent
 
   private
 
-  def reason_step
-    Rails.logger.info "REASONING: Understanding request..."
+  def seed_plan_from_prompt
+    return unless @plan.empty?
 
-    tools_list = DhanAgentToolMapper.tools_for_llm.map { |t| "#{t[:name]} (#{t[:description]})" }.join(", ")
+    normalized_prompt = @prompt.to_s.downcase
+    symbol_hint = extract_symbol_fresh
+
+    plan_steps =
+      if normalized_prompt.match?(/option\s+chain/i)
+        build_seeded_plan(symbol_hint, [:search_instrument, :get_option_chain])
+      elsif normalized_prompt.match?(/historical|ohlc|candle|chart/)
+        build_seeded_plan(symbol_hint, [:search_instrument, :get_historical_intraday])
+      elsif normalized_prompt.match?(/\b(quote|price|ltp)\b/)
+        build_seeded_plan(symbol_hint, [:search_instrument, :get_live_quote])
+      else
+        nil
+      end
+
+    return unless plan_steps&.any?
+
+    @plan = plan_steps.each_with_index.map do |step, idx|
+      {
+        id: idx,
+        tool: step[:tool],
+        description: step[:description],
+        params: step[:params] || {},
+        status: 'pending'
+      }
+    end
+
+    parameters_needed = {}
+    parameters_needed[:symbol] = symbol_hint if symbol_hint.present?
+
+    @reasoning = {
+      seeded: true,
+      goal: 'seeded_plan',
+      required_tools: plan_steps.map { |s| s[:tool].to_s },
+      parameters_needed: parameters_needed
+    }
+
+    enrich_plan_with_params
+    publish_event(:plan, { plan: sanitized_plan })
+  rescue StandardError => e
+    Rails.logger.warn "Seed plan failed: #{e.message}"
+  end
+
+  def build_seeded_plan(symbol_hint, tools)
+    symbol_upcase = symbol_hint.to_s.strip.upcase if symbol_hint.present?
+
+    tools.map do |tool|
+      case tool
+      when :search_instrument
+        {
+          tool: :search_instrument,
+          description: symbol_upcase.present? ? "Find instrument for #{symbol_upcase}" : 'Find instrument',
+          params: symbol_upcase.present? ? { symbol: symbol_upcase } : { symbol_needs_lookup: true }
+        }
+      when :get_option_chain
+        {
+          tool: :get_option_chain,
+          description: 'Get option chain',
+          params: {}
+        }
+      when :get_historical_intraday
+        {
+          tool: :get_historical_intraday,
+          description: 'Get intraday historical data',
+          params: { timeframe: 'intraday', interval: '15', symbol_needs_lookup: true }
+        }
+      when :get_live_quote
+        {
+          tool: :get_live_quote,
+          description: 'Get live quote',
+          params: {}
+        }
+      else
+        { tool: tool, description: tool.to_s.humanize, params: {} }
+      end
+    end
+  end
+
+  def reason_step
+    Rails.logger.info 'REASONING: Understanding request...'
+    publish_event(:thinking, { message: 'Reasoning about the request…' })
+
+    tools_list = DhanAgentToolMapper.tools_for_llm.map { |t| "#{t[:name]} (#{t[:description]})" }.join(', ')
 
     reasoning_prompt = <<~PROMPT
       User request: "#{@prompt}"
@@ -80,13 +162,14 @@ class IntelligentTradingAgent
     PROMPT
 
     ai_response = OllamaClient.new.chat(
-      model: "qwen2.5:1.5b-instruct",
+      model: Trading::LlmClient::DEFAULT_MODEL,
       prompt: reasoning_prompt
     )
 
     parse_reasoning(ai_response)
   rescue StandardError => e
     Rails.logger.error "Reasoning error: #{e.message}"
+    publish_event(:error, { message: "Reasoning failed: #{e.message}" })
   end
 
   def parse_reasoning(ai_response)
@@ -95,8 +178,10 @@ class IntelligentTradingAgent
 
     @reasoning = JSON.parse(json_match[0], symbolize_names: true)
     Rails.logger.info "Reasoning: #{@reasoning.inspect}"
+    publish_event(:reasoning_complete, { reasoning: sanitize_for_stream(@reasoning) }) if @reasoning
   rescue JSON::ParserError
-    Rails.logger.error "Failed to parse reasoning"
+    Rails.logger.error 'Failed to parse reasoning'
+    publish_event(:error, { message: 'Failed to parse reasoning response' })
   end
 
   def plan_next_step
@@ -104,16 +189,19 @@ class IntelligentTradingAgent
 
     # If reasoning failed (e.g., LLM unreachable), fall back to a deterministic plan
     if @reasoning.nil?
-      Rails.logger.warn "⚠️ No reasoning available; using fallback plan"
+      Rails.logger.warn '⚠️ No reasoning available; using fallback plan'
+      publish_event(:thinking, { message: 'Reasoning unavailable, using fallback plan…' })
       @plan = generate_fallback_plan
       # Ensure IDs and params are prepared just like the normal path
       @plan.each_with_index { |step, idx| step[:id] = idx }
       enrich_plan_with_params
       Rails.logger.info "📋 Plan created (fallback): #{@plan.map { |s| "#{s[:id]}-#{s[:tool]}" }.join(' → ')}"
+      publish_event(:plan, { plan: sanitized_plan })
       return
     end
 
     required_tools = @reasoning[:required_tools] || []
+    required_tools = prioritize_tools(required_tools)
 
     if required_tools.empty?
       # Generate plan from scratch
@@ -122,39 +210,39 @@ class IntelligentTradingAgent
     end
 
     # Check if we need to find an instrument first (if any tool needs a symbol)
-    needs_instrument = required_tools.any? { |tool|
+    needs_instrument = required_tools.any? do |tool|
       tool.to_s.match?(/quote|historical|ohlc|option|price|market/i)
-    }
+    end
 
     # Add search_instrument as FIRST step if needed (before any other steps)
-    if needs_instrument && !required_tools.any? { |t| t.to_s.include?('instrument') }
-      Rails.logger.info "🔍 Adding search_instrument as first step (required for data tools)"
+    if needs_instrument && required_tools.none? { |t| t.to_s.include?('instrument') }
+      Rails.logger.info '🔍 Adding search_instrument as first step (required for data tools)'
       # Use symbol from reasoning if available, otherwise extract
-      symbol = if @reasoning && @reasoning[:parameters_needed] && @reasoning[:parameters_needed][:symbol]
-                 @reasoning[:parameters_needed][:symbol].to_s.upcase
-               else
-                 extract_symbol_fresh
-               end
+      raw_symbol = @reasoning&.dig(:parameters_needed, :symbol)
+      symbol = normalize_reasoning_symbol(raw_symbol) || extract_symbol_fresh
 
-      if symbol
-        @plan.insert(0, {
-          id: 0,
-          tool: :search_instrument,
-          description: "Find instrument for #{symbol}",
-          params: { symbol: symbol },
-          status: 'pending'
-        })
-      end
+      search_params = {}
+      search_params[:symbol] = symbol if symbol.present?
+      description = symbol.present? ? "Find instrument for #{symbol}" : 'Find instrument'
+
+      @plan.insert(0, {
+                     id: 0,
+                     tool: :search_instrument,
+                     description: description,
+                     params: search_params,
+                     status: 'pending'
+                   })
     end
 
     # Plan each tool execution
-    required_tools.each_with_index do |tool_name, idx|
-      tool = DhanAgentToolMapper::TOOLS[tool_name.to_sym]
+    required_tools.each_with_index do |tool_name, _idx|
+      tool_sym = tool_name.to_sym
+      tool = DhanAgentToolMapper::TOOLS[tool_sym]
       next unless tool
 
       step = {
         id: @plan.length,
-        tool: tool_name.to_sym,
+        tool: tool_sym,
         tool_class: tool[:model],
         description: tool[:description],
         params_needed: tool[:params] || [],
@@ -172,6 +260,7 @@ class IntelligentTradingAgent
 
     enrich_plan_with_params
     Rails.logger.info "📋 Plan created: #{@plan.map { |s| "#{s[:id]}-#{s[:tool]}" }.join(' → ')}"
+    publish_event(:plan, { plan: sanitized_plan })
   end
 
   def generate_initial_plan
@@ -224,13 +313,19 @@ class IntelligentTradingAgent
       Be specific about which tool to use and what parameters are needed.
     PROMPT
 
-    ai_response = OllamaClient.new.chat(model: "qwen2.5:1.5b-instruct", prompt: planning_prompt)
+    ai_response = OllamaClient.new.chat(
+      model: Trading::LlmClient::DEFAULT_MODEL,
+      prompt: planning_prompt
+    )
     @plan = parse_ai_plan(ai_response) || generate_fallback_plan
 
     Rails.logger.info "📋 Generated plan: #{@plan.length} steps"
+    publish_event(:plan, { plan: sanitized_plan })
   rescue StandardError => e
     Rails.logger.error "Plan generation error: #{e.message}"
+    publish_event(:error, { message: "Plan generation error: #{e.message}" })
     @plan = generate_fallback_plan
+    publish_event(:plan, { plan: sanitized_plan })
   end
 
   def parse_ai_plan(ai_response)
@@ -271,18 +366,17 @@ class IntelligentTradingAgent
       case param.to_s
       when /symbol/
         # Use symbol from reasoning if available, otherwise extract
-        if @reasoning && @reasoning[:parameters_needed] && @reasoning[:parameters_needed][:symbol]
-          params[:symbol] = @reasoning[:parameters_needed][:symbol].to_s.upcase
-        else
-          params[:symbol] = extract_symbol_fresh
-        end
+        params[:symbol] = if @reasoning && @reasoning[:parameters_needed] && @reasoning[:parameters_needed][:symbol]
+                            normalize_reasoning_symbol(@reasoning[:parameters_needed][:symbol])
+                          end
+        params[:symbol] ||= extract_symbol_fresh
+        params[:symbol] = params[:symbol].to_s.strip.upcase if params[:symbol]
+        params[:symbol] = params[:symbol].presence
         # If not found, we might need to look it up
-        if params[:symbol].nil?
-          params[:symbol_needs_lookup] = true
-        end
+        params[:symbol_needs_lookup] = true if params[:symbol].blank?
       when /date|from_date|to_date/
         params[:from_date] ||= 7.days.ago.strftime('%Y-%m-%d')
-        params[:to_date] ||= Date.today.strftime('%Y-%m-%d')
+        params[:to_date] ||= Time.zone.today.strftime('%Y-%m-%d')
       when /interval/
         params[:interval] = '15' # Default 15 min candles
       when /timeframe/
@@ -310,15 +404,26 @@ class IntelligentTradingAgent
 
     Rails.logger.info "🔧 Resolved params: #{resolved_params.inspect}"
 
+    step_number = next_step_number
+    step_info = sanitize_step(current_step, step_number)
+    publish_event(:step_started, { step: step_info })
+
     result = execute_tool(current_step[:tool], resolved_params)
 
     @completed_steps << {
       step: current_step,
       result: result,
-      timestamp: Time.now
+      timestamp: Time.zone.now
     }
 
-    current_step[:status] = 'completed'
+    summary = summarize_step_result(result)
+    if summary[:status] == 'error'
+      current_step[:status] = 'failed'
+      publish_event(:step_failed, { step: step_info.merge(status: 'failed'), error: summary[:summary] })
+    else
+      current_step[:status] = 'completed'
+      publish_event(:step_completed, { step: step_info.merge(status: 'completed'), result: summary })
+    end
     @current_step_index += 1
   rescue StandardError => e
     Rails.logger.error "❌ Execution error: #{e.message}"
@@ -326,9 +431,10 @@ class IntelligentTradingAgent
     @completed_steps << {
       step: current_step,
       result: { error: e.message },
-      timestamp: Time.now
+      timestamp: Time.zone.now
     }
     current_step[:status] = 'failed'
+    publish_event(:step_failed, { step: step_info || sanitize_step(current_step, step_number), error: e.message })
   end
 
   def resolve_params(params)
@@ -360,19 +466,17 @@ class IntelligentTradingAgent
 
     # Only add dates if they're NOT already set and the tool needs them
     # Don't add dates to search_instrument or other non-historical tools
-    unless params.nil? || params.empty?
-      # Only add default dates if the params hash is for historical data
-      if resolved.key?(:timeframe) || @prompt.match?(/historical|intraday|daily/i)
-        resolved[:from_date] ||= 7.days.ago.strftime('%Y-%m-%d')
-        resolved[:to_date] ||= Date.today.strftime('%Y-%m-%d')
-      end
+    # Only add default dates if the params hash is for historical data
+    if params.present? && (resolved.key?(:timeframe) || @prompt.match?(/historical|intraday|daily/i))
+      resolved[:from_date] ||= 7.days.ago.strftime('%Y-%m-%d')
+      resolved[:to_date] ||= Time.zone.today.strftime('%Y-%m-%d')
     end
 
     resolved
   end
 
   def execute_tool(tool_name, params = {})
-    Rails.logger.info "🔧 Executing tool: #{tool_name.to_s} with params: #{params.inspect}"
+    Rails.logger.info "🔧 Executing tool: #{tool_name} with params: #{params.inspect}"
 
     case tool_name.to_s
     when /search_instrument|get_instruments_by_segment|find_instrument/
@@ -383,41 +487,44 @@ class IntelligentTradingAgent
       if instrument
         @context[:instrument] = instrument
         Rails.logger.info "✅ Found instrument: #{instrument.symbol_name} (ID: #{instrument.security_id})"
+        instrument
       else
         Rails.logger.warn "⚠️ Instrument not found for: #{symbol}"
+        { error: "Instrument #{symbol.presence || 'unknown'} not found" }
       end
-      instrument
 
     when /get_live_quote|get_quote|quote|get_last_price|last_price|ltp/
-      return { error: "No instrument found. Need to search for symbol first." } unless @context[:instrument]
+      return { error: 'No instrument found. Need to search for symbol first.' } unless @context[:instrument]
+
       get_quote_for_instrument(params)
 
     when /get_historical_intraday|historical_intraday|intraday|candles|get_candles/
       unless @context[:instrument]
-        Rails.logger.error "❌ No instrument in context for historical data"
-        return { error: "No instrument found. Need to search for symbol first." }
+        Rails.logger.error '❌ No instrument in context for historical data'
+        return { error: 'No instrument found. Need to search for symbol first.' }
       end
       params[:timeframe] = 'intraday'
       get_historical_for_instrument(params)
 
     when /get_historical_daily|historical_daily|daily|historical/
       unless @context[:instrument]
-        Rails.logger.error "❌ No instrument in context for historical data"
-        return { error: "No instrument found. Need to search for symbol first." }
+        Rails.logger.error '❌ No instrument in context for historical data'
+        return { error: 'No instrument found. Need to search for symbol first.' }
       end
       params[:timeframe] = 'daily'
       get_historical_for_instrument(params)
 
     when /get_ohlc|ohlc|candles|get_candles/
-      return { error: "No instrument found. Need to search for symbol first." } unless @context[:instrument]
+      return { error: 'No instrument found. Need to search for symbol first.' } unless @context[:instrument]
+
       get_ohlc_for_instrument(params)
 
     when /get_option_chain|option_chain/
       unless @context[:instrument]
-        Rails.logger.error "❌ No instrument in context for option chain"
-        return { error: "No instrument found. Need to search for symbol first." }
+        Rails.logger.error '❌ No instrument in context for option chain'
+        return { error: 'No instrument found. Need to search for symbol first.' }
       end
-      Rails.logger.info "🔗 Getting option chain with instrument in context"
+      Rails.logger.info '🔗 Getting option chain with instrument in context'
       get_option_chain_for_instrument(params)
 
     when /account_balance|get_account_balance|balance/
@@ -460,43 +567,39 @@ class IntelligentTradingAgent
   end
 
   def screen_portfolio_stocks(params)
-    Rails.logger.info "📊 Screening from PORTFOLIO holdings"
+    Rails.logger.info '📊 Screening from PORTFOLIO holdings'
 
     holdings = DhanHQ::Models::Holding.all
 
-    if holdings.empty?
-      return { message: "No holdings in portfolio", stocks: [] }
-    end
+    return { message: 'No holdings in portfolio', stocks: [] } if holdings.empty?
 
     # Get quotes for each holding
-    screened_stocks = holdings.map do |hold|
-      begin
-        inst = DhanHQ::Models::Instrument.find_anywhere(hold.trading_symbol, exact_match: true)
-        next unless inst
+    screened_stocks = holdings.filter_map do |hold|
+      inst = DhanHQ::Models::Instrument.find_anywhere(hold.trading_symbol, exact_match: true)
+      next unless inst
 
-        # Ensure exchange_segment is a string
-        exchange_segment = inst.exchange_segment.to_s
-        security_id = inst.security_id.to_i
+      # Ensure exchange_segment is a string
+      exchange_segment = inst.exchange_segment.to_s
+      security_id = inst.security_id.to_i
 
-        quote_response = DhanHQ::Models::MarketFeed.quote(
-          exchange_segment => [security_id]
-        )
-        quote_data = quote_response.dig('data', exchange_segment, security_id.to_s)
-        current_price = quote_data&.dig('last_price')&.to_f
+      quote_response = DhanHQ::Models::MarketFeed.quote(
+        exchange_segment => [security_id]
+      )
+      quote_data = quote_response.dig('data', exchange_segment, security_id.to_s)
+      current_price = quote_data&.dig('last_price')&.to_f
 
-        {
-          symbol: hold.trading_symbol,
-          current_price: current_price,
-          invested_price: hold.average_price.to_f,
-          quantity: hold.quantity.to_f,
-          pnl: (current_price - hold.average_price.to_f) * hold.quantity.to_f,
-          change_percent: calculate_change(hold.average_price.to_f, current_price)
-        }
-      rescue StandardError => e
-        Rails.logger.error "Error fetching quote for #{hold.trading_symbol}: #{e.message}"
-        nil
-      end
-    end.compact
+      {
+        symbol: hold.trading_symbol,
+        current_price: current_price,
+        invested_price: hold.average_price.to_f,
+        quantity: hold.quantity.to_f,
+        pnl: (current_price - hold.average_price.to_f) * hold.quantity.to_f,
+        change_percent: calculate_change(hold.average_price.to_f, current_price)
+      }
+    rescue StandardError => e
+      Rails.logger.error "Error fetching quote for #{hold.trading_symbol}: #{e.message}"
+      nil
+    end
 
     # Sort by performance
     criteria = params[:sort_by] || 'performance'
@@ -514,71 +617,66 @@ class IntelligentTradingAgent
     end
 
     { stocks: ranked_stocks.take(params[:limit] || 10), mode: 'portfolio' }
-
   rescue StandardError => e
     Rails.logger.error "Portfolio screening error: #{e.message}"
     { error: e.message, stocks: [] }
   end
 
   def screen_market_stocks(params)
-    Rails.logger.info "📊 Screening from MARKET (NIFTY stocks)"
+    Rails.logger.info '📊 Screening from MARKET (NIFTY stocks)'
 
-    # Get NIFTY 50 or NIFTY 100 stocks
-    index_name = params[:index] || 'NIFTY50'
+    # Get NIFTY or NIFTY 100 stocks
+    index_name = params[:index] || 'NIFTY'
     segment = 'NSE_EQ' # NSE Equity segment
 
     # Get instruments for the index/segment
     instruments = DhanHQ::Models::Instrument.by_segment(segment)
 
-    if instruments.empty?
-      return { message: "No stocks found for #{index_name}", stocks: [] }
-    end
+    return { message: "No stocks found for #{index_name}", stocks: [] } if instruments.empty?
 
     # Get quotes for a sample of popular stocks (limit to top traded)
     # Popular stocks: RELIANCE, TCS, HDFC BANK, ICICI BANK, INFY, HINDUNILVR, etc.
-    popular_symbols = ['RELIANCE', 'TCS', 'HDFC BANK', 'ICICI BANK', 'INFY', 'HINDUNILVR', 'BHARTIARTL', 'SBIN', 'BAJFINANCE', 'HDFCLIFE']
+    popular_symbols = ['RELIANCE', 'TCS', 'HDFC BANK', 'ICICI BANK', 'INFY', 'HINDUNILVR', 'BHARTIARTL', 'SBIN',
+                       'BAJFINANCE', 'HDFCLIFE']
 
-    screened_stocks = popular_symbols.map do |symbol|
-      begin
-        inst = DhanHQ::Models::Instrument.find_anywhere(symbol, exact_match: true)
-        next unless inst
+    screened_stocks = popular_symbols.filter_map do |symbol|
+      inst = DhanHQ::Models::Instrument.find_anywhere(symbol, exact_match: true)
+      next unless inst
 
-        # Ensure exchange_segment is a string
-        exchange_segment = inst.exchange_segment.to_s
-        security_id = inst.security_id.to_i
+      # Ensure exchange_segment is a string
+      exchange_segment = inst.exchange_segment.to_s
+      security_id = inst.security_id.to_i
 
-        Rails.logger.info "📊 Getting quote for #{symbol}: segment=#{exchange_segment}, id=#{security_id}"
+      Rails.logger.info "📊 Getting quote for #{symbol}: segment=#{exchange_segment}, id=#{security_id}"
 
-        quote_response = DhanHQ::Models::MarketFeed.quote(
-          exchange_segment => [security_id]
-        )
-        quote_data = quote_response.dig('data', exchange_segment, security_id.to_s)
+      quote_response = DhanHQ::Models::MarketFeed.quote(
+        exchange_segment => [security_id]
+      )
+      quote_data = quote_response.dig('data', exchange_segment, security_id.to_s)
 
-        ohlc = quote_data&.dig('ohlc') || {}
-        last_price = quote_data&.dig('last_price')&.to_f || 0
-        prev_close = ohlc['close']&.to_f || last_price
-        day_change = last_price - prev_close
-        day_change_percent = prev_close > 0 ? ((day_change / prev_close) * 100) : 0
+      ohlc = quote_data&.dig('ohlc') || {}
+      last_price = quote_data&.dig('last_price')&.to_f || 0
+      prev_close = ohlc['close']&.to_f || last_price
+      day_change = last_price - prev_close
+      day_change_percent = prev_close.positive? ? ((day_change / prev_close) * 100) : 0
 
-        {
-          symbol: symbol,
-          current_price: last_price,
-          prev_close: prev_close,
-          day_change: day_change,
-          day_change_percent: day_change_percent,
-          volume: quote_data&.dig('volume')&.to_i
-        }
-      rescue StandardError => e
-        Rails.logger.error "Error fetching quote for #{symbol}: #{e.message}"
-        nil
-      end
-    end.compact
+      {
+        symbol: symbol,
+        current_price: last_price,
+        prev_close: prev_close,
+        day_change: day_change,
+        day_change_percent: day_change_percent,
+        volume: quote_data&.dig('volume')&.to_i
+      }
+    rescue StandardError => e
+      Rails.logger.error "Error fetching quote for #{symbol}: #{e.message}"
+      nil
+    end
 
     # Sort by day change percent
     ranked_stocks = screened_stocks.sort_by { |s| -(s[:day_change_percent] || 0) }
 
     { stocks: ranked_stocks.take(params[:limit] || 10), mode: 'market' }
-
   rescue StandardError => e
     Rails.logger.error "Market screening error: #{e.message}"
     { error: e.message, stocks: [] }
@@ -590,7 +688,8 @@ class IntelligentTradingAgent
   end
 
   def calculate_change(invested, current)
-    return 0 unless invested && current && invested > 0
+    return 0 unless invested && current && invested.positive?
+
     ((current.to_f - invested) / invested.to_f) * 100
   end
 
@@ -604,13 +703,13 @@ class IntelligentTradingAgent
     if symbol_up.match?(/NIFTY|SENSEX|BANKNIFTY|FINNIFTY|MIDCPNIFTY/i)
       Rails.logger.info "📌 Searching for index #{symbol_up} in IDX_I segment"
       begin
-        result = DhanHQ::Models::Instrument.find("IDX_I", symbol_up)
+        result = DhanHQ::Models::Instrument.find('IDX_I', symbol_up)
         if result
           Rails.logger.info "✅ Found index: #{result.symbol_name} (#{result.security_id})"
           return result
         end
       rescue StandardError => e
-        Rails.logger.info "Index not found in IDX_I, trying general search"
+        Rails.logger.info 'Index not found in IDX_I, trying general search'
       end
     end
 
@@ -622,7 +721,7 @@ class IntelligentTradingAgent
         return result
       end
     rescue StandardError => e
-      Rails.logger.info "Exact match failed, trying fuzzy search"
+      Rails.logger.info 'Exact match failed, trying fuzzy search'
     end
 
     # If exact match fails, try fuzzy search
@@ -638,26 +737,24 @@ class IntelligentTradingAgent
       if result_symbol != query_symbol && result_symbol.length > query_symbol.length + 2
         Rails.logger.info "⚠️ Fuzzy match returned #{result.symbol_name}, but searching for better match..."
         # Try to find exact symbol match in common segments
-        ['NSE_EQ', 'NSE_FNO'].each do |segment|
-          begin
-            candidates = DhanHQ::Models::Instrument.search(segment, symbol_up)
-            if candidates && candidates.any?
-              # Prefer results where symbol exactly matches query
-              exact_candidate = candidates.find { |c| c.symbol_name.to_s.upcase.gsub(/\s+/, '') == query_symbol }
-              if exact_candidate
-                Rails.logger.info "✅ Found better match: #{exact_candidate.symbol_name} (#{exact_candidate.security_id})"
-                return exact_candidate
-              end
-              # Otherwise prefer shorter symbol names (less likely to be ETFs/funds)
-              best = candidates.min_by { |c| c.symbol_name.to_s.length }
-              if best && best.symbol_name.to_s.length < result.symbol_name.to_s.length
-                Rails.logger.info "✅ Found shorter match: #{best.symbol_name} (#{best.security_id})"
-                return best
-              end
+        %w[NSE_EQ NSE_FNO].each do |segment|
+          candidates = DhanHQ::Models::Instrument.search(segment, symbol_up)
+          if candidates&.any?
+            # Prefer results where symbol exactly matches query
+            exact_candidate = candidates.find { |c| c.symbol_name.to_s.upcase.gsub(/\s+/, '') == query_symbol }
+            if exact_candidate
+              Rails.logger.info "✅ Found better match: #{exact_candidate.symbol_name} (#{exact_candidate.security_id})"
+              return exact_candidate
             end
-          rescue StandardError => e
-            Rails.logger.debug "Search in #{segment} failed: #{e.message}"
+            # Otherwise prefer shorter symbol names (less likely to be ETFs/funds)
+            best = candidates.min_by { |c| c.symbol_name.to_s.length }
+            if best && best.symbol_name.to_s.length < result.symbol_name.to_s.length
+              Rails.logger.info "✅ Found shorter match: #{best.symbol_name} (#{best.security_id})"
+              return best
+            end
           end
+        rescue StandardError => e
+          Rails.logger.debug { "Search in #{segment} failed: #{e.message}" }
         end
       end
 
@@ -673,7 +770,7 @@ class IntelligentTradingAgent
   end
 
   def get_quote_for_instrument(_params = {})
-    return { error: "No instrument in context" } unless @context[:instrument]
+    return { error: 'No instrument in context' } unless @context[:instrument]
 
     inst = @context[:instrument]
 
@@ -684,13 +781,13 @@ class IntelligentTradingAgent
   end
 
   def get_historical_for_instrument(params = {})
-    return { error: "No instrument in context" } unless @context[:instrument]
+    return { error: 'No instrument in context' } unless @context[:instrument]
 
     inst = @context[:instrument]
     timeframe = (params[:timeframe] || 'intraday').to_s
 
     from_date = (params[:from_date] || 7.days.ago.strftime('%Y-%m-%d')).to_s
-    to_date = (params[:to_date] || Date.today.strftime('%Y-%m-%d')).to_s
+    to_date = (params[:to_date] || Time.zone.today.strftime('%Y-%m-%d')).to_s
 
     Rails.logger.info "📊 Fetching #{timeframe} data for #{inst.symbol_name} (#{from_date} to #{to_date})"
 
@@ -718,7 +815,7 @@ class IntelligentTradingAgent
   end
 
   def get_ohlc_for_instrument(_params = {})
-    return { error: "No instrument in context" } unless @context[:instrument]
+    return { error: 'No instrument in context' } unless @context[:instrument]
 
     inst = @context[:instrument]
 
@@ -729,7 +826,7 @@ class IntelligentTradingAgent
   end
 
   def get_option_chain_for_instrument(params = {})
-    return { error: "No instrument in context" } unless @context[:instrument]
+    return { error: 'No instrument in context' } unless @context[:instrument]
 
     inst = @context[:instrument]
     expiry = params[:expiry]
@@ -745,13 +842,13 @@ class IntelligentTradingAgent
         # Always prefer the gem's convenience method on the instrument
         expiry_list = option_instrument.expiry_list
 
-        if expiry_list.is_a?(Array) && expiry_list.length > 0
+        if expiry_list.is_a?(Array) && expiry_list.length.positive?
           expiry = expiry_list.first.to_s
           Rails.logger.info "✅ Found expiries: #{expiry_list.first(3).join(', ')}. Using first: #{expiry}"
           @context[:available_expiries] = expiry_list
         else
           # Fallback: use next Thursday
-          next_thursday = Date.today
+          next_thursday = Time.zone.today
           next_thursday += 1 until next_thursday.thursday?
           expiry = next_thursday.strftime('%Y-%m-%d')
           Rails.logger.warn "⚠️ No expiries found, using calculated Thursday: #{expiry}"
@@ -759,7 +856,7 @@ class IntelligentTradingAgent
       rescue StandardError => e
         Rails.logger.error "Failed to get expiry list: #{e.message}"
         # Fallback to calculated expiry
-        next_thursday = Date.today
+        next_thursday = Time.zone.today
         next_thursday += 1 until next_thursday.thursday?
         expiry = next_thursday.strftime('%Y-%m-%d')
       end
@@ -803,18 +900,18 @@ class IntelligentTradingAgent
     last_result = @completed_steps.last[:result]
 
     # If the last step found an instrument, but we still need more data
-    if last_result.is_a?(DhanHQ::Models::Instrument) && @prompt.include?('quote')
-      # Add get_quote step if not already there
-      unless @plan.any? { |s| s[:tool].to_s.include?('quote') }
-        @plan << {
-          id: @plan.length,
-          tool: :get_live_quote,
-          description: "Get live quote",
-          params: {},
-          status: 'pending'
-        }
-      end
-    end
+    return unless last_result.is_a?(DhanHQ::Models::Instrument) && @prompt.include?('quote')
+    # Add get_quote step if not already there
+    return if @plan.any? { |s| s[:tool].to_s.include?('quote') }
+
+    @plan << {
+      id: @plan.length,
+      tool: :get_live_quote,
+      description: 'Get live quote',
+      params: {},
+      status: 'pending'
+    }
+    publish_event(:plan, { plan: sanitized_plan })
   end
 
   def task_complete?
@@ -823,32 +920,30 @@ class IntelligentTradingAgent
 
     # Check for error in last step (only if result is a Hash)
     last_step = @completed_steps.last
-    if last_step && last_step[:result].is_a?(Hash) && last_step[:result][:error] && @iteration > 3
-      return true
-    end
+    return true if last_step && last_step[:result].is_a?(Hash) && last_step[:result][:error] && @iteration > 3
 
     false
   end
 
   # Memoized version (can cache wrong results, use extract_symbol_fresh when you need fresh extraction)
   def extract_symbol
-    @symbol ||= extract_symbol_fresh
+    @extract_symbol ||= extract_symbol_fresh
   end
 
   # Fresh symbol extraction without memoization
   def extract_symbol_fresh
     # Comprehensive list of common words to exclude
-    common_words = [
-      'OPTION', 'CHAIN', 'STOCKS', 'SHOW', 'GET', 'FOR', 'OF', 'IS', 'ME', 'MY', 'THE', 'A', 'AN',
-      'HISTORICAL', 'DATA', 'INTRADAY', 'DAILY', 'QUOTE', 'PRICE', 'LTP', 'OHLC', 'CANDLE', 'CHART',
-      'ACCOUNT', 'BALANCE', 'POSITION', 'HOLDING', 'ORDER', 'BUY', 'SELL', 'MARKET', 'LIMIT'
+    common_words = %w[
+      OPTION CHAIN STOCKS SHOW GET FOR OF IS ME MY THE A AN
+      HISTORICAL DATA INTRADAY DAILY QUOTE PRICE LTP OHLC CANDLE CHART
+      ACCOUNT BALANCE POSITION HOLDING ORDER BUY SELL MARKET LIMIT
     ]
 
     # Known stock symbols for validation
     known_symbols = [
       'RELIANCE', 'TCS', 'INFY', 'WIPRO', 'HDFC', 'SBI', 'AXIS', 'ICICI', 'BAJAJ', 'LT', 'HERO',
       'MARUTI', 'TITAN', 'BRITANNIA', 'TITANGAR', 'DMART', 'ADANIENT', 'ULTRACEMCO', 'HINDUNILEVER',
-      'ASIANPAINT', 'NIFTY', 'BANKNIFTY', 'SENSEX', 'NIFTY50', 'NIFTY 50'
+      'ASIANPAINT', 'NIFTY', 'BANKNIFTY', 'SENSEX', 'NIFTY', 'NIFTY'
     ]
 
     patterns = [
@@ -869,19 +964,25 @@ class IntelligentTradingAgent
 
     patterns.each do |pattern|
       match = @prompt.match(pattern)
-      if match && match[1] && match[1].length >= 3
-        candidate = match[1].upcase
-        next if common_words.include?(candidate)
+      next unless match && match[1] && match[1].length >= 3
 
-        # If it's a known symbol, return immediately
-        return candidate if known_symbols.include?(candidate)
+      candidate = match[1].upcase
+      next if common_words.include?(candidate)
 
-        candidates << candidate
-      end
+      # If it's a known symbol, return immediately
+      return candidate if known_symbols.include?(candidate)
+
+      candidates << candidate
     end
 
     # If we found candidates, return the first one (prefer known patterns)
-    candidates.first
+    return candidates.first if candidates.any?
+
+    # Fallback: grab the first uppercase token in the prompt that isn't a common word
+    fallback = @prompt.scan(/\b[A-Z]{3,}\b/).map(&:upcase).find do |token|
+      !common_words.include?(token) && token.length <= 12
+    end
+    fallback
   end
 
   def extract_quantity
@@ -901,8 +1002,8 @@ class IntelligentTradingAgent
   def generate_fallback_plan
     if @prompt.match?(/option.*chain/i)
       return [
-        { tool: :search_instrument, description: "Find instrument", params: { symbol: extract_symbol } },
-        { tool: :get_option_chain, description: "Get option chain", params: {} }
+        { tool: :search_instrument, description: 'Find instrument', params: { symbol: extract_symbol } },
+        { tool: :get_option_chain, description: 'Get option chain', params: {} }
       ]
     end
 
@@ -910,35 +1011,181 @@ class IntelligentTradingAgent
       symbol = extract_symbol
       return [
         { tool: :search_instrument, description: "Find instrument for #{symbol}", params: { symbol: symbol } },
-        { tool: :get_historical_intraday, description: "Get historical data", params: { from_date: 7.days.ago.strftime('%Y-%m-%d'), to_date: Date.today.strftime('%Y-%m-%d') } }
+        { tool: :get_historical_intraday, description: 'Get historical data',
+          params: { from_date: 7.days.ago.strftime('%Y-%m-%d'), to_date: Time.zone.today.strftime('%Y-%m-%d') } }
       ]
     end
 
     if @prompt.match?(/ohlc|quote|price/i)
       symbol = extract_symbol
       return [
-        { tool: :search_instrument, description: "Find instrument", params: { symbol: symbol } },
-        { tool: :get_live_quote, description: "Get quote", params: {} }
+        { tool: :search_instrument, description: 'Find instrument', params: { symbol: symbol } },
+        { tool: :get_live_quote, description: 'Get quote', params: {} }
       ]
     end
 
-    [{ tool: :general_help, description: "Provide help" }]
+    [{ tool: :general_help, description: 'Provide help' }]
+  end
+
+  def next_step_number
+    @step_counter += 1
+  end
+
+  def sanitized_plan
+    @plan.each_with_index.map do |step, idx|
+      sanitize_step(step, idx + 1)
+    end
+  end
+
+  def sanitize_step(step, number = nil)
+    return {} unless step.is_a?(Hash)
+
+    data = {
+      id: step[:id],
+      number: number,
+      tool: step[:tool]&.to_s,
+      description: step[:description],
+      status: step[:status]
+    }
+    data[:params] = sanitize_for_stream(step[:params]) if step[:params]
+    data
+  end
+
+  def normalize_reasoning_symbol(raw_value)
+    return nil unless raw_value
+
+    str = raw_value.to_s
+    # Prefer explicit symbols already present in context
+    explicit = @context[:instrument]&.symbol_name
+    return explicit.upcase if explicit.present?
+
+    upcase_str = str.upcase
+    hint = KNOWN_SYMBOL_HINTS.find { |sym| upcase_str.include?(sym) }
+    return hint if hint
+
+    # Look for uppercase tokens (e.g., NIFTY, BANKNIFTY)
+    token = upcase_str.scan(/[A-Z0-9]+/).find do |candidate|
+      candidate.length >= 3 && candidate == candidate.upcase
+    end
+
+    # If none found, fall back to general tokenization
+    token ||= upcase_str.split(/[\s,;:()\-\[\]]+/).find { |candidate| candidate.length.between?(3, 10) }
+
+    sanitized = token&.gsub(/[^A-Za-z0-9]/, '')
+    return nil if sanitized && sanitized.length > 12
+    return nil unless sanitized.present?
+
+    normalized =
+      case sanitized.upcase
+      when /\ANIFTY\d+\z/
+        'NIFTY'
+      when /\ANIFTYFIFTY\z/
+        'NIFTY'
+      else
+        sanitized.upcase
+      end
+
+    normalized
+  end
+
+  def prioritize_tools(tool_names)
+    array = tool_names.map(&:to_s)
+    scored = array.each_with_index.map do |name, idx|
+      [priority_for_tool(name), idx, name]
+    end
+    scored.sort.map { |(_, _, name)| name }
+  end
+
+  def priority_for_tool(name)
+    return 0 if name.match?(/search|find|instrument/)
+    return 1 if name.match?(/option|quote|historical|ohlc|candle/)
+
+    2
+  end
+
+  def sanitize_for_stream(value)
+    case value
+    when Hash
+      value.each_with_object({}) do |(k, v), memo|
+        memo[k.to_s] = sanitize_for_stream(v)
+      end
+    when Array
+      value.map { |v| sanitize_for_stream(v) }
+    when DhanHQ::Models::Instrument
+      {
+        symbol: value.symbol_name,
+        exchange: value.exchange_segment,
+        security_id: value.security_id
+      }
+    when BigDecimal
+      value.to_f
+    when Time, ActiveSupport::TimeWithZone, Date, DateTime
+      value.iso8601
+    when Numeric, TrueClass, FalseClass, NilClass
+      value
+    else
+      value.to_s
+    end
+  end
+
+  def summarize_step_result(result)
+    case result
+    when Hash
+      if result[:error]
+        { status: 'error', summary: result[:error].to_s }
+      elsif result[:message]
+        { status: 'success', summary: result[:message].to_s }
+      elsif result[:data]
+        { status: 'success', summary: truncate_text(result[:data].to_s) }
+      else
+        { status: 'success', summary: 'Step completed' }
+      end
+    when DhanHQ::Models::Instrument
+      { status: 'success', summary: "Instrument #{result.symbol_name}" }
+    else
+      { status: 'success', summary: truncate_text(result.to_s) }
+    end
+  rescue StandardError => e
+    Rails.logger.warn "Step summary error: #{e.message}"
+    { status: 'success', summary: 'Step completed' }
+  end
+
+  def truncate_text(text, length = 160)
+    str = text.to_s
+    return str if str.length <= length
+
+    "#{str[0, length]}…"
+  end
+
+  def publish_event(type, payload = {})
+    return unless @progress_callback
+
+    safe_payload = sanitize_for_stream(payload)
+    @progress_callback.call(type.to_s, safe_payload)
+  rescue StandardError => e
+    Rails.logger.debug "Progress callback failed: #{e.message}"
   end
 
   def compile_final_result
     if @completed_steps.empty?
       return {
         type: :error,
-        message: "Task not completed",
-        formatted: "❌ Could not fulfill request"
+        message: 'Task not completed',
+        formatted: '❌ Could not fulfill request'
       }
     end
 
     final_data = @completed_steps.last[:result]
+    result_type = final_data.is_a?(Hash) && final_data[:error].present? ? :error : :success
+    message = if result_type == :error
+                final_data[:error].to_s
+              else
+                "Completed in #{@completed_steps.length} steps"
+              end
 
     {
-      type: :success,
-      message: "Completed in #{@completed_steps.length} steps",
+      type: result_type,
+      message: message,
       data: final_data,
       formatted: format_final_result(final_data),
       plan: @plan.map { |s| { tool: s[:tool], description: s[:description], status: s[:status] } },
@@ -977,9 +1224,9 @@ class IntelligentTradingAgent
     stocks = result_data.is_a?(Array) ? result_data : (result_data[:stocks] || [])
     mode = result_data.is_a?(Hash) ? result_data[:mode] : nil
 
-    return "<p>📊 No stocks found</p>" if stocks.nil? || stocks.empty?
+    return '<p>📊 No stocks found</p>' if stocks.blank?
 
-    title = mode == 'portfolio' ? "📊 Top Performers in Your Portfolio" : "📈 Top Gaining Stocks (Market)"
+    title = mode == 'portfolio' ? '📊 Top Performers in Your Portfolio' : '📈 Top Gaining Stocks (Market)'
 
     html = <<~HTML
       <div class="bg-gradient-to-r from-blue-50 to-purple-50 p-4 rounded-lg">
@@ -990,39 +1237,39 @@ class IntelligentTradingAgent
               <tr class="border-b">
     HTML
 
-    if mode == 'portfolio'
-      html += <<~HTML
+    html += if mode == 'portfolio'
+              <<~HTML
                 <th class="text-left p-2">Symbol</th>
                 <th class="text-right p-2">Invested</th>
                 <th class="text-right p-2">Current</th>
                 <th class="text-right p-2">Qty</th>
                 <th class="text-right p-2">P&L</th>
                 <th class="text-right p-2">Change %</th>
-      HTML
-    else
-      html += <<~HTML
+              HTML
+            else
+              <<~HTML
                 <th class="text-left p-2">Symbol</th>
                 <th class="text-right p-2">Prev Close</th>
                 <th class="text-right p-2">Current</th>
                 <th class="text-right p-2">Change</th>
                 <th class="text-right p-2">Change %</th>
                 <th class="text-right p-2">Volume</th>
-      HTML
-    end
+              HTML
+            end
 
     html += <<~HTML
-              </tr>
-            </thead>
-            <tbody>
+        </tr>
+      </thead>
+      <tbody>
     HTML
 
     stocks.each do |stock|
       if mode == 'portfolio'
         change = stock[:change_percent] || 0
-        change_color = change >= 0 ? "text-green-600" : "text-red-600"
-        change_sign = change >= 0 ? "+" : ""
+        change_color = change >= 0 ? 'text-green-600' : 'text-red-600'
+        change_sign = change >= 0 ? '+' : ''
         pnl = stock[:pnl] || 0
-        pnl_color = pnl >= 0 ? "text-green-600" : "text-red-600"
+        pnl_color = pnl >= 0 ? 'text-green-600' : 'text-red-600'
 
         html += <<~HTML
           <tr class="border-b">
@@ -1036,8 +1283,8 @@ class IntelligentTradingAgent
         HTML
       else
         change = stock[:day_change_percent] || 0
-        change_color = change >= 0 ? "text-green-600" : "text-red-600"
-        change_sign = change >= 0 ? "+" : ""
+        change_color = change >= 0 ? 'text-green-600' : 'text-red-600'
+        change_sign = change >= 0 ? '+' : ''
         volume = stock[:volume] || 0
 
         html += <<~HTML
@@ -1066,7 +1313,7 @@ class IntelligentTradingAgent
 
   def format_historical_data(data)
     # Ensure data is a Hash
-    return "<p>Invalid historical data format</p>" unless data.is_a?(Hash)
+    return '<p>Invalid historical data format</p>' unless data.is_a?(Hash)
 
     closes = data[:close] || data['close'] || []
     opens = data[:open] || data['open'] || []
@@ -1076,7 +1323,7 @@ class IntelligentTradingAgent
     timestamps = data[:timestamp] || data['timestamp'] || []
     timeframe = data[:timeframe] || data['timeframe'] || 'intraday' # default to intraday
 
-    symbol_name = @context[:instrument]&.symbol_name || "Instrument"
+    symbol_name = @context[:instrument]&.symbol_name || 'Instrument'
 
     # Determine if daily or intraday for header and timestamp formatting
     is_daily = timeframe.to_s.downcase == 'daily'
@@ -1087,7 +1334,7 @@ class IntelligentTradingAgent
         <p class="text-sm text-gray-600 mb-2">📈 #{closes.length} candles collected</p>
     HTML
 
-    if closes.length > 0
+    if closes.length.positive?
       html += <<~HTML
         <div class="overflow-x-auto">
           <table class="w-full text-xs">
@@ -1112,9 +1359,9 @@ class IntelligentTradingAgent
         # Format timestamp based on timeframe
         if timestamps[i]
           begin
-            time_obj = Time.at(timestamps[i].to_f)
+            time_obj = Time.zone.at(timestamps[i].to_f)
             timestamp_str = is_daily ? time_obj.strftime('%Y-%m-%d') : time_obj.strftime('%H:%M')
-          rescue => e
+          rescue StandardError => e
             Rails.logger.error "Error formatting timestamp #{timestamps[i]}: #{e.message}"
             timestamp_str = '-'
           end
@@ -1142,7 +1389,7 @@ class IntelligentTradingAgent
       HTML
     end
 
-    html += "</div>"
+    html += '</div>'
     html
   end
 
@@ -1157,7 +1404,7 @@ class IntelligentTradingAgent
   end
 
   def format_option_chain_result(result_data)
-    return "<p>❌ No option chain data available</p>" unless result_data.is_a?(Hash)
+    return '<p>❌ No option chain data available</p>' unless result_data.is_a?(Hash)
 
     chain_data = result_data[:chain] || result_data['chain'] || result_data
     inst = result_data[:instrument] || @context[:instrument]
@@ -1182,10 +1429,10 @@ class IntelligentTradingAgent
         strike_floats = oc.keys.map { |k| k.to_s.to_f }.sort
         # Find ATM strike closest to spot
         atm_strike = if spot_ltp
-                        strike_floats.min_by { |s| (s - spot_ltp.to_f).abs }
-                      else
-                        strike_floats[strike_floats.length / 2]
-                      end
+                       strike_floats.min_by { |s| (s - spot_ltp.to_f).abs }
+                     else
+                       strike_floats[strike_floats.length / 2]
+                     end
         # Window around ATM (e.g., 10 strikes total)
         window = 10
         atm_index = strike_floats.index(atm_strike) || 0
@@ -1220,8 +1467,10 @@ class IntelligentTradingAgent
         # Helper to fetch strike bucket regardless of key formatting
         fetch_bucket = lambda do |hash, strike|
           return hash[strike.to_s] if hash.key?(strike.to_s)
+
           key6 = format('%.6f', strike.to_f)
           return hash[key6] if hash.key?(key6)
+
           # Fallback: numeric match
           k = hash.keys.find { |kk| kk.to_s.to_f == strike.to_f }
           k ? hash[k] : nil
@@ -1238,24 +1487,24 @@ class IntelligentTradingAgent
           pe_ltp = (pe[:last_price] || pe['last_price']).to_f
           ce_oi  = (ce[:oi] || ce['oi']).to_i
           pe_oi  = (pe[:oi] || pe['oi']).to_i
-          ce_bid = (ce[:top_bid_price] || ce['top_bid_price'] || ce[:best_bid_price] || ce['best_bid_price'])
-          ce_ask = (ce[:top_ask_price] || ce['top_ask_price'] || ce[:best_ask_price] || ce['best_ask_price'])
-          pe_bid = (pe[:top_bid_price] || pe['top_bid_price'] || pe[:best_bid_price] || pe['best_bid_price'])
-          pe_ask = (pe[:top_ask_price] || pe['top_ask_price'] || pe[:best_ask_price] || pe['best_ask_price'])
+          ce_bid = ce[:top_bid_price] || ce['top_bid_price'] || ce[:best_bid_price] || ce['best_bid_price']
+          ce_ask = ce[:top_ask_price] || ce['top_ask_price'] || ce[:best_ask_price] || ce['best_ask_price']
+          pe_bid = pe[:top_bid_price] || pe['top_bid_price'] || pe[:best_bid_price] || pe['best_bid_price']
+          pe_ask = pe[:top_ask_price] || pe['top_ask_price'] || pe[:best_ask_price] || pe['best_ask_price']
 
           row_class = s == atm_strike ? 'bg-yellow-50' : ''
 
           html += <<~HTML
             <tr class="border-b #{row_class}">
-              <td class="text-right p-1">#{ce_ltp > 0 ? ce_ltp.round(2) : '-'}</td>
-              <td class="text-right p-1">#{ce_oi > 0 ? ce_oi.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse : '-'}</td>
-              <td class="text-right p-1">#{ce_iv > 0 ? ce_iv.round(2) : '-'}</td>
+              <td class="text-right p-1">#{ce_ltp.positive? ? ce_ltp.round(2) : '-'}</td>
+              <td class="text-right p-1">#{ce_oi.positive? ? ce_oi.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse : '-'}</td>
+              <td class="text-right p-1">#{ce_iv.positive? ? ce_iv.round(2) : '-'}</td>
               <td class="text-right p-1">#{ce_bid ? ce_bid.to_f.round(2) : '-'} / #{ce_ask ? ce_ask.to_f.round(2) : '-'}</td>
               <td class="text-center p-1 font-semibold">#{s.to_i}</td>
               <td class="text-right p-1">#{pe_bid ? pe_bid.to_f.round(2) : '-'} / #{pe_ask ? pe_ask.to_f.round(2) : '-'}</td>
-              <td class="text-right p-1">#{pe_iv > 0 ? pe_iv.round(2) : '-'}</td>
-              <td class="text-right p-1">#{pe_oi > 0 ? pe_oi.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse : '-'}</td>
-              <td class="text-right p-1">#{pe_ltp > 0 ? pe_ltp.round(2) : '-'}</td>
+              <td class="text-right p-1">#{pe_iv.positive? ? pe_iv.round(2) : '-'}</td>
+              <td class="text-right p-1">#{pe_oi.positive? ? pe_oi.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse : '-'}</td>
+              <td class="text-right p-1">#{pe_ltp.positive? ? pe_ltp.round(2) : '-'}</td>
             </tr>
           HTML
         end
@@ -1273,8 +1522,7 @@ class IntelligentTradingAgent
       html += "<p class='text-sm'>Invalid option chain data</p>"
     end
 
-    html += "</div>"
+    html += '</div>'
     html
   end
 end
-

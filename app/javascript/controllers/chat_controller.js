@@ -265,7 +265,7 @@ export default class extends Controller {
     setTimeout(() => {
       this.messagesContainerTarget.scrollTop =
         this.messagesContainerTarget.scrollHeight;
-    }, 100);
+    }, 1000);
   }
 
   csrf() {

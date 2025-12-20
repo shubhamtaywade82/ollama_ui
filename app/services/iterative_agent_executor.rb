@@ -54,7 +54,7 @@ class IterativeAgentExecutor
     PROMPT
 
     ai_response = OllamaClient.new.chat(
-      model: 'qwen2.5:1.5b-instruct',
+      model: Trading::LlmClient::DEFAULT_MODEL,
       prompt: plan_prompt
     )
 

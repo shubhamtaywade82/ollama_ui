@@ -71,3 +71,6 @@ gem 'faraday_middleware'
 gem 'faraday-retry' # Retry logic for API resilience
 gem 'ruby-technical-analysis' # Optional: Technical analysis for DhanHQ (any version)
 gem 'technical-analysis', '~> 0.2' # Optional: Additional indicators
+
+# Bulk upserts for instruments/derivatives importer
+gem 'activerecord-import'

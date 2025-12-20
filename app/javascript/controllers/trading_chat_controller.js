@@ -14,12 +14,50 @@ export default class extends Controller {
     "messagesContainer",
     "accountInfo",
     "accountValue",
+    "modeSelector",
+    "tradingModeBtn",
+    "technicalAnalysisModeBtn",
+    "progressSidebar",
+    "progressContainer",
+    "progressLog",
   ];
 
   connect() {
+    this.agentMode = 'trading'; // 'trading' or 'technical_analysis'
+    this.currentProgressLog = null;
+    this.progressEntries = [];
     this.loadAccountInfo();
     this.setupTextareaEnterHandler();
     this.setupTextareaAutoResize();
+    this.updateModeButtons();
+    this.initializeProgressSidebar();
+  }
+
+  initializeProgressSidebar() {
+    if (this.hasProgressLogTarget) {
+      this.currentProgressLog = this.progressLogTarget;
+    }
+  }
+
+  switchMode(event) {
+    event.preventDefault();
+    const mode = event.currentTarget.dataset.mode;
+    if (mode === 'trading' || mode === 'technical_analysis') {
+      this.agentMode = mode;
+      this.updateModeButtons();
+    }
+  }
+
+  updateModeButtons() {
+    if (this.hasTradingModeBtnTarget && this.hasTechnicalAnalysisModeBtnTarget) {
+      if (this.agentMode === 'trading') {
+        this.tradingModeBtnTarget.classList.remove('opacity-60');
+        this.technicalAnalysisModeBtnTarget.classList.add('opacity-60');
+      } else {
+        this.tradingModeBtnTarget.classList.add('opacity-60');
+        this.technicalAnalysisModeBtnTarget.classList.remove('opacity-60');
+      }
+    }
   }
 
   setupTextareaEnterHandler() {
@@ -100,7 +138,20 @@ export default class extends Controller {
   async submit(event) {
     event.preventDefault();
     this.accumulatedText = "";
+    this.accumulatedContent = ""; // Reset for technical analysis mode
+    this.progressEntries = []; // Reset progress entries
     const prompt = this.promptTarget.value;
+
+    // Clear progress sidebar and show placeholder
+    if (this.hasProgressLogTarget) {
+      this.progressLogTarget.innerHTML = "";
+      this.currentProgressLog = this.progressLogTarget;
+      // Show placeholder again
+      const placeholder = this.progressContainerTarget?.querySelector('.text-center');
+      if (placeholder) {
+        placeholder.style.display = 'block';
+      }
+    }
 
     if (!prompt.trim()) {
       alert("Please enter a message.");
@@ -117,41 +168,28 @@ export default class extends Controller {
     this.scrollToBottom();
 
     try {
-      // Try agent first (smart LLM-based routing)
+      this.resetProgressState();
+      this.setAssistantMessage("⏳ Working on it…");
+
+      let streamed = false;
+      try {
+        streamed = await this.streamAgent(prompt);
+      } catch (streamError) {
+        console.warn("Streaming agent failed", streamError);
+        if (streamError?.message) {
+          this.appendProgressLog(`Streaming error: ${streamError.message}`, "error");
+        }
+      }
+
+      if (streamed) {
+        return;
+      }
+
+      this.appendProgressLog("Switching to fallback agent…", "warning");
+
       const agentResponse = await this.tryAgent(prompt);
 
-      if (agentResponse) {
-        // Handle different response formats
-        let content = "";
-        if (agentResponse.formatted) {
-          content = agentResponse.formatted;
-        } else if (agentResponse.data) {
-          // If formatted is missing but data exists, try to format it
-          if (typeof agentResponse.data === "object") {
-            content = `<pre class="text-xs overflow-auto">${JSON.stringify(
-              agentResponse.data,
-              null,
-              2
-            )}</pre>`;
-          } else {
-            content = String(agentResponse.data);
-          }
-        } else if (agentResponse.message) {
-          content = agentResponse.message;
-        } else if (typeof agentResponse === "string") {
-          content = agentResponse;
-        } else {
-          // Fallback: show error message with object details
-          content = `<div class="text-yellow-600">⚠️ Response received but format unexpected</div><pre class="text-xs overflow-auto">${JSON.stringify(
-            agentResponse,
-            null,
-            2
-          )}</pre>`;
-        }
-
-        this.currentMessageElement.querySelector(".message-content").innerHTML =
-          content;
-        this.scrollToBottom();
+      if (this.handleAgentResponse(agentResponse)) {
         return;
       }
 
@@ -159,63 +197,19 @@ export default class extends Controller {
       const tradingResponse = await this.handleTradingCommand(prompt);
 
       if (tradingResponse) {
-        this.currentMessageElement.querySelector(".message-content").innerHTML =
-          tradingResponse;
-        this.scrollToBottom();
-      } else {
-        // STREAMING AGENT LLM RESPONSE
-        const res = await fetch("/trading/agent_stream", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-CSRF-Token": this.csrf(),
-          },
-          body: JSON.stringify({ prompt }),
-        });
-
-        if (!res.ok) throw new Error("Agent stream failed");
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        this.accumulatedText = "";
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-
-          for (const line of lines) {
-            if (line.startsWith("data: ")) {
-              try {
-                let data = JSON.parse(line.slice(6));
-                let txt = typeof data === "string" ? data : data.text || data;
-                if (txt) {
-                  this.accumulatedText += txt;
-                  const html = marked.parse(this.accumulatedText);
-                  this.currentMessageElement.querySelector(
-                    ".message-content"
-                  ).innerHTML = html;
-                  this.scrollToBottom();
-                }
-              } catch (e) {
-                // Sometimes LLM streams raw text line, not JSON. Accept as markdown.
-                const txt = line.replace(/^data: /, "");
-                this.accumulatedText += txt;
-                const html = marked.parse(this.accumulatedText);
-                this.currentMessageElement.querySelector(
-                  ".message-content"
-                ).innerHTML = html;
-                this.scrollToBottom();
-              }
-            }
-          }
-        }
+        this.setAssistantMessage(tradingResponse);
+        return;
       }
+
+      this.setAssistantMessage(
+        "I wasn't able to process that request. Please try rephrasing.",
+        true
+      );
     } catch (e) {
-      const errorHtml = `<span class="text-red-400">Error: ${e.message}</span>`;
+      console.error("Trading chat error", e);
+      const errorHtml = `<span class="text-red-400">Error: ${this.escapeHtml(
+        e.message
+      )}</span>`;
       if (this.currentMessageElement) {
         this.currentMessageElement.querySelector(".message-content").innerHTML =
           errorHtml;
@@ -228,6 +222,352 @@ export default class extends Controller {
       // Reset textarea height after clearing
       this.resizeTextarea();
     }
+  }
+
+  resetProgressState() {
+    this.progressEntries = [];
+    // Clear progress sidebar and show placeholder
+    if (this.hasProgressLogTarget) {
+      this.progressLogTarget.innerHTML = "";
+      this.currentProgressLog = this.progressLogTarget;
+      // Show placeholder again
+      const placeholder = this.progressContainerTarget?.querySelector('.text-center');
+      if (placeholder) {
+        placeholder.style.display = 'block';
+      }
+    }
+  }
+
+  setAssistantMessage(content, treatAsMarkdown = true) {
+    if (!this.currentMessageElement) return;
+    const target = this.currentMessageElement.querySelector(".message-content");
+    if (!target) return;
+
+    if (treatAsMarkdown) {
+      target.innerHTML = this.renderMarkdown(content);
+    } else {
+      target.innerHTML = content;
+    }
+    this.scrollToBottom();
+  }
+
+  async streamAgent(prompt) {
+    const endpoint = this.agentMode === 'technical_analysis'
+      ? "/trading/technical_analysis_stream"
+      : "/trading/agent_stream";
+
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": this.csrf(),
+      },
+      body: JSON.stringify({ prompt, mode: this.agentMode }),
+    });
+
+    if (!res.ok) {
+      return false;
+    }
+
+    if (!res.body || !res.body.getReader) {
+      return false;
+    }
+
+    this.appendProgressLog("Agent connected. Waiting for plan…", "muted");
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let completed = false;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+
+        const payloadRaw = line.slice(6);
+        if (!payloadRaw.trim()) continue;
+
+        try {
+          const payload = JSON.parse(payloadRaw);
+          const outcome = this.handleAgentEvent(payload);
+          if (outcome === "done") {
+            completed = true;
+            break;
+          }
+          if (outcome === "error") {
+            throw new Error(payload?.data?.message || payload?.message || "Agent error");
+          }
+        } catch (err) {
+          console.error("Failed to parse agent stream payload", err, line);
+        }
+      }
+
+      if (completed) {
+        break;
+      }
+    }
+
+    return completed;
+  }
+
+  appendProgressLog(message, variant = "muted") {
+    if (!message) return;
+
+    // Use sidebar progress log instead of inline
+    if (!this.currentProgressLog && this.hasProgressLogTarget) {
+      this.currentProgressLog = this.progressLogTarget;
+    }
+
+    if (!this.currentProgressLog) return;
+
+    // Hide placeholder text when first progress entry is added
+    const placeholder = this.progressContainerTarget?.querySelector('.text-center');
+    if (placeholder && this.progressEntries.length === 0) {
+      placeholder.style.display = 'none';
+    }
+
+    const entry = document.createElement("div");
+    entry.className = `${this.progressVariantClass(variant)} flex items-start gap-2 py-1`;
+    entry.style.whiteSpace = "pre-line";
+
+    const timeSpan = document.createElement("span");
+    timeSpan.className = "text-xs text-gray-400 flex-shrink-0";
+    timeSpan.style.color = "var(--text-secondary)";
+    timeSpan.textContent = new Date().toLocaleTimeString();
+
+    const messageSpan = document.createElement("span");
+    messageSpan.className = "flex-1";
+    messageSpan.textContent = message;
+
+    entry.appendChild(timeSpan);
+    entry.appendChild(messageSpan);
+    this.currentProgressLog.appendChild(entry);
+
+    // Scroll progress sidebar to bottom
+    if (this.hasProgressContainerTarget) {
+      this.progressContainerTarget.scrollTop = this.progressContainerTarget.scrollHeight;
+    }
+
+    // Also scroll chat to bottom
+    this.scrollToBottom();
+
+    if (!this.progressEntries) this.progressEntries = [];
+    this.progressEntries.push({ message, variant, timestamp: new Date() });
+    if (this.progressEntries.length > 100) {
+      // Keep last 100 entries, remove oldest
+      const oldestEntry = this.currentProgressLog.firstElementChild;
+      if (oldestEntry) {
+        oldestEntry.remove();
+      }
+      this.progressEntries.shift();
+    }
+  }
+
+  progressVariantClass(variant) {
+    const base = "text-xs leading-relaxed";
+    switch (variant) {
+      case "info":
+        return `${base} text-blue-600`;
+      case "success":
+        return `${base} text-green-600`;
+      case "error":
+        return `${base} text-red-500`;
+      case "warning":
+        return `${base} text-yellow-600`;
+      default:
+        return `${base} text-gray-600`;
+    }
+  }
+
+  // Progress panel methods are no longer needed - using sidebar instead
+
+  handleAgentEvent(event) {
+    if (!event || !event.type) return null;
+
+    const type = event.type;
+    const data = event.data || {};
+
+    switch (type) {
+      case "start":
+        this.appendProgressLog("Agent started.", "info");
+        break;
+      case "mode":
+        if (data.mode === "iterative") {
+          this.appendProgressLog("Using multi-step workflow.", "info");
+        } else if (data.mode === "direct") {
+          this.appendProgressLog("Using direct workflow.", "info");
+        }
+        break;
+      case "thinking":
+        if (data.message) {
+          this.appendProgressLog(data.message, "muted");
+        }
+        break;
+      case "intent":
+        if (data.tool || data.action) {
+          const intentLabel = this.humanizeTool(data.tool || data.action);
+          const symbol = data.symbol ? ` for ${data.symbol}` : "";
+          this.appendProgressLog(`Intent: ${intentLabel}${symbol}.`, "info");
+        }
+        break;
+      case "plan":
+        if (Array.isArray(data.plan) && data.plan.length > 0) {
+          data.plan.forEach((step) => {
+            const label = this.stepLabel(step);
+            this.appendProgressLog(`Plan: ${label}`, "muted");
+          });
+        }
+        break;
+      case "step_started":
+        if (data.step) {
+          this.appendProgressLog(`▶ ${this.stepLabel(data.step)} — started`, "info");
+        }
+        break;
+      case "step_completed":
+        if (data.step) {
+          const summary = data.result?.summary;
+          const label = this.stepLabel(data.step);
+          const message = summary ? `${label} — ✅ ${summary}` : `${label} — ✅ Completed`;
+          this.appendProgressLog(message, "success");
+        }
+        break;
+      case "step_failed":
+        if (data.step) {
+          const label = this.stepLabel(data.step);
+          const errorText = data.error || "Step failed";
+          this.appendProgressLog(`${label} — ❌ ${errorText}`, "error");
+        }
+        break;
+      case "reasoning_complete":
+        if (data.reasoning) {
+          this.appendProgressLog("Reasoning complete.", "info");
+        }
+        break;
+      case "summary_ready":
+        if (data.message) {
+          this.appendProgressLog(`Summary ready: ${data.message}`, "info");
+        }
+        break;
+      case "content":
+        // For technical analysis, accumulate content chunks
+        if (data.content) {
+          if (!this.accumulatedContent) this.accumulatedContent = "";
+          this.accumulatedContent += data.content;
+          this.setAssistantMessage(this.accumulatedContent);
+        } else if (data.message) {
+          this.appendProgressLog(data.message, "muted");
+        }
+        break;
+      case "progress":
+        // Progress messages from technical analysis agent (goes to sidebar)
+        if (data.message) {
+          // Determine variant based on message content
+          let variant = "muted";
+          if (data.message.includes("✅") || data.message.includes("Completed")) {
+            variant = "success";
+          } else if (data.message.includes("❌") || data.message.includes("Error")) {
+            variant = "error";
+          } else if (data.message.includes("⚠️") || data.message.includes("Warning")) {
+            variant = "warning";
+          } else if (data.message.includes("🔍") || data.message.includes("🔧") || data.message.includes("⚙️")) {
+            variant = "info";
+          }
+          this.appendProgressLog(data.message, variant);
+        }
+        break;
+      case "error":
+        const errorMessage = data.message || data.error || "Agent error";
+        this.appendProgressLog(`Error: ${errorMessage}`, "error");
+        this.setAssistantMessage(
+          `<span class="text-red-500">❌ ${this.escapeHtml(errorMessage)}</span>`,
+          false
+        );
+        return "done";
+      case "result":
+        // Reset accumulated content and show final result
+        if (this.accumulatedContent) {
+          this.accumulatedContent = "";
+        }
+        this.setAssistantMessage(data.formatted || data.message || "");
+        this.appendProgressLog("Final response ready.", "success");
+        return "done";
+      default:
+        if (data.message) {
+          this.appendProgressLog(data.message, "muted");
+        }
+    }
+
+    return null;
+  }
+
+  handleAgentResponse(agentResponse) {
+    if (!agentResponse) return false;
+
+    let content = "";
+    if (agentResponse.formatted) {
+      content = agentResponse.formatted;
+    } else if (agentResponse.data) {
+      if (typeof agentResponse.data === "object") {
+        content = `<pre class="text-xs overflow-auto">${JSON.stringify(
+          agentResponse.data,
+          null,
+          2
+        )}</pre>`;
+      } else {
+        content = String(agentResponse.data);
+      }
+    } else if (agentResponse.message) {
+      content = agentResponse.message;
+    } else if (typeof agentResponse === "string") {
+      content = agentResponse;
+    } else {
+      content = `<div class="text-yellow-600">⚠️ Response received but format unexpected</div><pre class="text-xs overflow-auto">${JSON.stringify(
+        agentResponse,
+        null,
+        2
+      )}</pre>`;
+    }
+
+    this.setAssistantMessage(content);
+    this.appendProgressLog("Fallback agent responded.", "success");
+    return true;
+  }
+
+  stepLabel(step = {}) {
+    const number = step.number || step.id;
+    const description =
+      step.description || this.humanizeTool(step.tool) || "Step";
+    const symbol = step.symbol ? ` (${step.symbol})` : "";
+    return number
+      ? `Step ${number}: ${description}${symbol}`
+      : `${description}${symbol}`;
+  }
+
+  humanizeTool(tool) {
+    if (!tool) return "";
+    return tool
+      .toString()
+      .split("_")
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(" ");
+  }
+
+  escapeHtml(str) {
+    if (!str) return "";
+    return str
+      .toString()
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
   }
 
   async tryAgent(prompt) {
@@ -578,6 +918,14 @@ ACCESS_TOKEN=your_access_token</pre><p class="text-xs text-gray-500 mt-2">Get AP
     `;
 
     return html;
+  }
+
+  renderMarkdown(content) {
+    if (!content) {
+      return "";
+    }
+
+    return marked.parse(content);
   }
 
   addMessage(role, content) {
