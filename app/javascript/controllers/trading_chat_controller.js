@@ -21,19 +21,24 @@ export default class extends Controller {
     "progressSidebar",
     "progressContainer",
     "progressLog",
+    "sidebarOverlay",
+    "progressBadge",
   ];
 
   connect() {
-    this.agentMode = 'trading'; // 'trading' or 'technical_analysis'
+    this.agentMode = "technical_analysis"; // Default to Analysis mode
     this.currentProgressLog = null;
     this.progressEntries = [];
     this.cable = null; // ActionCable consumer
     this.channel = null; // Current channel subscription
+    this.sidebarOpen = false;
+    this.progressSidebarOpen = false;
     this.loadAccountInfo();
     this.setupTextareaEnterHandler();
     this.setupTextareaAutoResize();
     this.updateModeButtons();
     this.initializeProgressSidebar();
+    this.setupResponsiveHandlers();
   }
 
   disconnect() {
@@ -46,6 +51,73 @@ export default class extends Controller {
       this.cable.disconnect();
       this.cable = null;
     }
+    // Clean up responsive handlers
+    if (this.resizeHandler) {
+      window.removeEventListener("resize", this.resizeHandler);
+    }
+  }
+
+  setupResponsiveHandlers() {
+    // Handle window resize to close sidebar on mobile when switching to desktop
+    this.resizeHandler = () => {
+      if (window.innerWidth >= 1024 && this.sidebarOpen) {
+        this.closeSidebar();
+      }
+    };
+    window.addEventListener("resize", this.resizeHandler);
+  }
+
+  toggleProgressSidebar(event) {
+    if (event) {
+      event.preventDefault();
+    }
+    if (this.progressSidebarOpen) {
+      this.closeProgressSidebar();
+    } else {
+      this.openProgressSidebar();
+    }
+  }
+
+  openProgressSidebar() {
+    if (!this.hasProgressSidebarTarget) return;
+
+    this.progressSidebarOpen = true;
+    const sidebar = this.progressSidebarTarget;
+
+    sidebar.classList.remove("translate-x-full");
+    sidebar.classList.add("translate-x-0");
+
+    // Hide badge when sidebar is open
+    if (this.hasProgressBadgeTarget) {
+      this.progressBadgeTarget.classList.add("hidden");
+    }
+  }
+
+  closeProgressSidebar(event) {
+    if (event) {
+      event.preventDefault();
+    }
+
+    if (!this.hasProgressSidebarTarget) return;
+
+    this.progressSidebarOpen = false;
+    const sidebar = this.progressSidebarTarget;
+
+    sidebar.classList.remove("translate-x-0");
+    sidebar.classList.add("translate-x-full");
+  }
+
+  // Legacy methods for mobile (kept for compatibility)
+  toggleSidebar(event) {
+    this.toggleProgressSidebar(event);
+  }
+
+  openSidebar() {
+    this.openProgressSidebar();
+  }
+
+  closeSidebar(event) {
+    this.closeProgressSidebar(event);
   }
 
   initializeProgressSidebar() {
@@ -57,20 +129,35 @@ export default class extends Controller {
   switchMode(event) {
     event.preventDefault();
     const mode = event.currentTarget.dataset.mode;
-    if (mode === 'trading' || mode === 'technical_analysis') {
+    if (mode === "trading" || mode === "technical_analysis") {
       this.agentMode = mode;
       this.updateModeButtons();
     }
   }
 
   updateModeButtons() {
-    if (this.hasTradingModeBtnTarget && this.hasTechnicalAnalysisModeBtnTarget) {
-      if (this.agentMode === 'trading') {
-        this.tradingModeBtnTarget.classList.remove('opacity-60');
-        this.technicalAnalysisModeBtnTarget.classList.add('opacity-60');
+    if (
+      this.hasTradingModeBtnTarget &&
+      this.hasTechnicalAnalysisModeBtnTarget
+    ) {
+      if (this.agentMode === "technical_analysis") {
+        // Analysis is active
+        this.technicalAnalysisModeBtnTarget.style.backgroundColor = "var(--accent-primary)";
+        this.technicalAnalysisModeBtnTarget.style.color = "white";
+        this.technicalAnalysisModeBtnTarget.classList.remove("opacity-60");
+        
+        this.tradingModeBtnTarget.style.backgroundColor = "var(--bg-tertiary)";
+        this.tradingModeBtnTarget.style.color = "var(--text-primary)";
+        this.tradingModeBtnTarget.classList.add("opacity-60");
       } else {
-        this.tradingModeBtnTarget.classList.add('opacity-60');
-        this.technicalAnalysisModeBtnTarget.classList.remove('opacity-60');
+        // Trading is active
+        this.tradingModeBtnTarget.style.backgroundColor = "var(--accent-primary)";
+        this.tradingModeBtnTarget.style.color = "white";
+        this.tradingModeBtnTarget.classList.remove("opacity-60");
+        
+        this.technicalAnalysisModeBtnTarget.style.backgroundColor = "var(--bg-tertiary)";
+        this.technicalAnalysisModeBtnTarget.style.color = "var(--text-primary)";
+        this.technicalAnalysisModeBtnTarget.classList.add("opacity-60");
       }
     }
   }
@@ -162,9 +249,10 @@ export default class extends Controller {
       this.progressLogTarget.innerHTML = "";
       this.currentProgressLog = this.progressLogTarget;
       // Show placeholder again
-      const placeholder = this.progressContainerTarget?.querySelector('.text-center');
+      const placeholder =
+        this.progressContainerTarget?.querySelector(".text-center");
       if (placeholder) {
-        placeholder.style.display = 'block';
+        placeholder.style.display = "block";
       }
     }
 
@@ -192,7 +280,10 @@ export default class extends Controller {
       } catch (streamError) {
         console.warn("Streaming agent failed", streamError);
         if (streamError?.message) {
-          this.appendProgressLog(`Streaming error: ${streamError.message}`, "error");
+          this.appendProgressLog(
+            `Streaming error: ${streamError.message}`,
+            "error"
+          );
         }
       }
 
@@ -246,9 +337,10 @@ export default class extends Controller {
       this.progressLogTarget.innerHTML = "";
       this.currentProgressLog = this.progressLogTarget;
       // Show placeholder again
-      const placeholder = this.progressContainerTarget?.querySelector('.text-center');
+      const placeholder =
+        this.progressContainerTarget?.querySelector(".text-center");
       if (placeholder) {
-        placeholder.style.display = 'block';
+        placeholder.style.display = "block";
       }
     }
   }
@@ -268,7 +360,7 @@ export default class extends Controller {
 
   async streamAgent(prompt) {
     // For technical analysis, use background jobs by default
-    if (this.agentMode === 'technical_analysis') {
+    if (this.agentMode === "technical_analysis") {
       return this.streamTechnicalAnalysisBackground(prompt);
     }
 
@@ -321,7 +413,9 @@ export default class extends Controller {
             break;
           }
           if (outcome === "error") {
-            throw new Error(payload?.data?.message || payload?.message || "Agent error");
+            throw new Error(
+              payload?.data?.message || payload?.message || "Agent error"
+            );
           }
         } catch (err) {
           console.error("Failed to parse agent stream payload", err, line);
@@ -348,8 +442,13 @@ export default class extends Controller {
     });
 
     if (!res.ok) {
-      const error = await res.json().catch(() => ({ error: "Failed to start analysis" }));
-      this.appendProgressLog(`Error: ${error.error || "Failed to start analysis"}`, "error");
+      const error = await res
+        .json()
+        .catch(() => ({ error: "Failed to start analysis" }));
+      this.appendProgressLog(
+        `Error: ${error.error || "Failed to start analysis"}`,
+        "error"
+      );
       return false;
     }
 
@@ -380,7 +479,7 @@ export default class extends Controller {
         this.channel = this.cable.subscriptions.create(
           {
             channel: "TechnicalAnalysisChannel",
-            job_id: jobId
+            job_id: jobId,
           },
           {
             connected: () => {
@@ -403,8 +502,11 @@ export default class extends Controller {
               }
             },
             disconnected: () => {
-              this.appendProgressLog("Disconnected from analysis stream", "muted");
-            }
+              this.appendProgressLog(
+                "Disconnected from analysis stream",
+                "muted"
+              );
+            },
           }
         );
       } catch (err) {
@@ -417,22 +519,28 @@ export default class extends Controller {
 
   async pollForUpdates(jobId) {
     // Fallback polling mechanism if ActionCable not available
-    this.appendProgressLog("Using polling mode (ActionCable not available)", "muted");
+    this.appendProgressLog(
+      "Using polling mode (ActionCable not available)",
+      "muted"
+    );
 
     const maxAttempts = 300; // 5 minutes max (1 second intervals)
     let attempts = 0;
     let lastEventId = 0;
 
     while (attempts < maxAttempts) {
-      await new Promise(resolve => setTimeout(resolve, 1000)); // Poll every second
+      await new Promise((resolve) => setTimeout(resolve, 1000)); // Poll every second
       attempts++;
 
       try {
-        const res = await fetch(`/trading/technical_analysis_status/${jobId}?last_event=${lastEventId}`, {
-          headers: {
-            "X-CSRF-Token": this.csrf(),
-          },
-        });
+        const res = await fetch(
+          `/trading/technical_analysis_status/${jobId}?last_event=${lastEventId}`,
+          {
+            headers: {
+              "X-CSRF-Token": this.csrf(),
+            },
+          }
+        );
 
         if (res.ok) {
           const data = await res.json();
@@ -449,8 +557,8 @@ export default class extends Controller {
             lastEventId = data.last_event_id || lastEventId;
           }
 
-          if (data.status === 'completed' || data.status === 'failed') {
-            return data.status === 'completed';
+          if (data.status === "completed" || data.status === "failed") {
+            return data.status === "completed";
           }
         }
       } catch (err) {
@@ -458,7 +566,10 @@ export default class extends Controller {
       }
     }
 
-    this.appendProgressLog("Polling timeout - analysis may still be running", "warning");
+    this.appendProgressLog(
+      "Polling timeout - analysis may still be running",
+      "warning"
+    );
     return false;
   }
 
@@ -473,17 +584,21 @@ export default class extends Controller {
     if (!this.currentProgressLog) return;
 
     // Hide placeholder text when first progress entry is added
-    const placeholder = this.progressContainerTarget?.querySelector('.text-center');
+    const placeholder =
+      this.progressContainerTarget?.querySelector(".text-center");
     if (placeholder && this.progressEntries.length === 0) {
-      placeholder.style.display = 'none';
+      placeholder.style.display = "none";
     }
 
     const entry = document.createElement("div");
-    entry.className = `${this.progressVariantClass(variant)} flex items-start gap-2 py-1`;
+    entry.className = `${this.progressVariantClass(
+      variant
+    )} flex items-start gap-2 py-1.5 px-2 rounded-md transition-colors duration-150 hover:bg-opacity-10 animate-fade-in`;
     entry.style.whiteSpace = "pre-line";
+    entry.style.wordBreak = "break-word";
 
     const messageSpan = document.createElement("span");
-    messageSpan.className = "flex-1";
+    messageSpan.className = "flex-1 text-xs sm:text-sm leading-relaxed";
     messageSpan.textContent = message;
 
     entry.appendChild(messageSpan);
@@ -491,7 +606,8 @@ export default class extends Controller {
 
     // Scroll progress sidebar to bottom
     if (this.hasProgressContainerTarget) {
-      this.progressContainerTarget.scrollTop = this.progressContainerTarget.scrollHeight;
+      this.progressContainerTarget.scrollTop =
+        this.progressContainerTarget.scrollHeight;
     }
 
     // Also scroll chat to bottom
@@ -510,18 +626,18 @@ export default class extends Controller {
   }
 
   progressVariantClass(variant) {
-    const base = "text-xs leading-relaxed";
+    const base = "text-xs sm:text-sm leading-relaxed";
     switch (variant) {
       case "info":
-        return `${base} text-blue-600`;
+        return `${base} text-blue-600 dark:text-blue-400`;
       case "success":
-        return `${base} text-green-600`;
+        return `${base} text-green-600 dark:text-green-400`;
       case "error":
-        return `${base} text-red-500`;
+        return `${base} text-red-500 dark:text-red-400`;
       case "warning":
-        return `${base} text-yellow-600`;
+        return `${base} text-yellow-600 dark:text-yellow-400`;
       default:
-        return `${base} text-gray-600`;
+        return `${base} text-gray-600 dark:text-gray-400`;
     }
   }
 
@@ -566,14 +682,19 @@ export default class extends Controller {
         break;
       case "step_started":
         if (data.step) {
-          this.appendProgressLog(`▶ ${this.stepLabel(data.step)} — started`, "info");
+          this.appendProgressLog(
+            `▶ ${this.stepLabel(data.step)} — started`,
+            "info"
+          );
         }
         break;
       case "step_completed":
         if (data.step) {
           const summary = data.result?.summary;
           const label = this.stepLabel(data.step);
-          const message = summary ? `${label} — ✅ ${summary}` : `${label} — ✅ Completed`;
+          const message = summary
+            ? `${label} — ✅ ${summary}`
+            : `${label} — ✅ Completed`;
           this.appendProgressLog(message, "success");
         }
         break;
@@ -609,13 +730,26 @@ export default class extends Controller {
         if (data.message) {
           // Determine variant based on message content
           let variant = "muted";
-          if (data.message.includes("✅") || data.message.includes("Completed")) {
+          if (
+            data.message.includes("✅") ||
+            data.message.includes("Completed")
+          ) {
             variant = "success";
-          } else if (data.message.includes("❌") || data.message.includes("Error")) {
+          } else if (
+            data.message.includes("❌") ||
+            data.message.includes("Error")
+          ) {
             variant = "error";
-          } else if (data.message.includes("⚠️") || data.message.includes("Warning")) {
+          } else if (
+            data.message.includes("⚠️") ||
+            data.message.includes("Warning")
+          ) {
             variant = "warning";
-          } else if (data.message.includes("🔍") || data.message.includes("🔧") || data.message.includes("⚙️")) {
+          } else if (
+            data.message.includes("🔍") ||
+            data.message.includes("🔧") ||
+            data.message.includes("⚙️")
+          ) {
             variant = "info";
           }
           this.appendProgressLog(data.message, variant);
@@ -625,7 +759,9 @@ export default class extends Controller {
         const errorMessage = data.message || data.error || "Agent error";
         this.appendProgressLog(`Error: ${errorMessage}`, "error");
         this.setAssistantMessage(
-          `<span class="text-red-500">❌ ${this.escapeHtml(errorMessage)}</span>`,
+          `<span class="text-red-500">❌ ${this.escapeHtml(
+            errorMessage
+          )}</span>`,
           false
         );
         return "done";
@@ -1070,7 +1206,8 @@ ACCESS_TOKEN=your_access_token</pre><p class="text-xs text-gray-500 mt-2">Get AP
   addMessage(role, content) {
     const messageDiv = document.createElement("div");
     messageDiv.className =
-      "mb-4 flex " + (role === "user" ? "justify-end" : "justify-start");
+      "mb-4 flex animate-fade-in " +
+      (role === "user" ? "justify-end" : "justify-start");
 
     const isAI = role === "assistant";
     const avatarBg = isAI
@@ -1081,16 +1218,16 @@ ACCESS_TOKEN=your_access_token</pre><p class="text-xs text-gray-500 mt-2">Get AP
       : `style="background: linear-gradient(to right, var(--accent-primary), var(--accent-secondary)); color: white;"`;
 
     messageDiv.innerHTML = `
-      <div class="flex gap-3 max-w-[85%] ${
+      <div class="flex gap-2 sm:gap-3 max-w-[90%] sm:max-w-[85%] ${
         role === "user" ? "flex-row-reverse" : ""
       }">
-        <div class="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center" ${avatarBg}>
-          ${isAI ? "💰" : "👤"}
+        <div class="flex-shrink-0 w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center shadow-sm transition-transform duration-200 hover:scale-105" ${avatarBg}>
+          <span class="text-base sm:text-lg">${isAI ? "🤖" : "👤"}</span>
         </div>
-        <div class="rounded-2xl px-4 py-3 shadow-sm ${
+        <div class="rounded-2xl px-3 sm:px-4 py-2.5 sm:py-3 shadow-sm transition-all duration-200 hover:shadow-md ${
           isAI ? "prose prose-sm max-w-none" : ""
         }" ${messageBg}>
-          <div class="message-content ${
+          <div class="message-content text-sm sm:text-base ${
             isAI ? "" : "whitespace-pre-wrap"
           }">${content}</div>
         </div>

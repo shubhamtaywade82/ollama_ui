@@ -8,7 +8,7 @@ module Services
         def build_tools_registry
           {
             'get_comprehensive_analysis' => {
-              description: 'Get comprehensive analysis data for an index or stock in ONE call: finds instrument, fetches LTP, historical data (up to 200 candles), and calculates ALL available indicators (RSI, MACD, ADX, Supertrend, ATR, BollingerBands). Use this instead of multiple separate tool calls for efficiency. IMPORTANT: Use correct segment - indices (NIFTY, BANKNIFTY, SENSEX) use "index", stocks (RELIANCE, TCS, etc.) use "equity".',
+              description: '[DEPRECATED - Use individual tools instead] Get comprehensive analysis data for an index or stock in ONE call. PREFER using individual tools (get_instrument_ltp, get_ohlc, get_historical_data, calculate_indicator) based on what you actually need. This tool violates the "no prefetching" principle and should only be used if explicitly needed for efficiency.',
               parameters: [
                 { name: 'underlying_symbol', type: 'string',
                   description: 'Underlying symbol. For indices: "NIFTY", "BANKNIFTY", "SENSEX". For stocks: "RELIANCE", "TCS", "INFY", etc. Auto-detects exchange: SENSEX→BSE, NIFTY/BANKNIFTY→NSE' },

@@ -10,6 +10,9 @@ require_relative 'technical_analysis_agent/tool_registry'
 require_relative 'technical_analysis_agent/tool_executor'
 require_relative 'technical_analysis_agent/conversation_executor'
 require_relative 'technical_analysis_agent/planning_executor'
+require_relative 'technical_analysis_agent/agent_context'
+require_relative 'technical_analysis_agent/react_runner'
+require_relative 'technical_analysis_agent/structured_output'
 require_relative 'technical_analysis_agent/tools'
 
 module Services
@@ -25,11 +28,13 @@ module Services
       include ToolExecutor
       include ConversationExecutor
       include PlanningExecutor
+      include ReactRunner
+      include StructuredOutput
       include Tools
 
       class << self
-        def analyze(query:, stream: false, use_planning: true, &)
-          new.analyze(query: query, stream: stream, use_planning: use_planning, &)
+        def analyze(query:, stream: false, use_react: true, &)
+          new.analyze(query: query, stream: stream, use_react: use_react, &)
         end
       end
 
@@ -43,7 +48,7 @@ module Services
         @learned_patterns = load_learned_patterns # Load learned patterns from storage
       end
 
-      def analyze(query:, stream: false, use_planning: true, &)
+      def analyze(query:, stream: false, use_react: true, &)
         return nil unless @client.enabled?
 
         # Clear caches for new conversation
@@ -53,13 +58,13 @@ module Services
         @error_history = []
         @current_query_keywords = extract_keywords(query) # Store for error learning
 
-        # Use planning mode by default (smaller prompts, better performance)
-        # Can be disabled via use_planning: false or AI_USE_PLANNING=false
-        use_planning = ENV.fetch('AI_USE_PLANNING', use_planning ? 'true' : 'false') == 'true' if use_planning.nil?
+        # Use ReAct mode by default (Rails-controlled loop, LLM only reasons)
+        # Can be disabled via use_react: false or AI_USE_REACT=false
+        use_react = ENV.fetch('AI_USE_REACT', use_react ? 'true' : 'false') == 'true' if use_react.nil?
 
-        if use_planning
-          # Planning-based execution: Plan → Execute → Synthesize
-          return execute_planning_loop(query: query, stream: stream, &)
+        if use_react
+          # ReAct-based execution: Rails-controlled loop, LLM plans and reasons
+          return execute_react_loop(query: query, stream: stream, &)
         end
 
         # Legacy conversation-based execution (fallback)

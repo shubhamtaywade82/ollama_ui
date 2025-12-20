@@ -31,7 +31,7 @@ class TechnicalAnalysisJob < ApplicationJob
     end
   end
 
-  def perform(job_id, query, use_planning: true)
+  def perform(job_id, query, use_react: true)
     Rails.logger.info("[TechnicalAnalysisJob] Starting analysis for job #{job_id}")
 
     # Initialize event storage
@@ -47,7 +47,7 @@ class TechnicalAnalysisJob < ApplicationJob
 
     begin
       # Execute analysis with streaming callbacks
-      Services::Ai::TechnicalAnalysisAgent.analyze(query: query, stream: true, use_planning: use_planning) do |chunk|
+      Services::Ai::TechnicalAnalysisAgent.analyze(query: query, stream: true, use_react: use_react) do |chunk|
         next unless chunk.present?
 
         if chunk.is_a?(String)

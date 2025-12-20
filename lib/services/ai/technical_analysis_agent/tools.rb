@@ -19,10 +19,10 @@ module Services
           rescue NameError
             # If autoloading fails, try to require it explicitly
             begin
-              require_dependency Rails.root.join('app', 'services', 'concerns', 'dhanhq_error_handler').to_s
+              require_dependency Rails.root.join('app/services/concerns/dhanhq_error_handler').to_s
             rescue LoadError, NameError
               # If that fails, try to load the file directly
-              load Rails.root.join('app', 'services', 'concerns', 'dhanhq_error_handler.rb').to_s
+              load Rails.root.join('app/services/concerns/dhanhq_error_handler.rb').to_s
             end
           end
         end
@@ -70,8 +70,18 @@ module Services
           # Ensure Concerns::DhanhqErrorHandler is loaded before calling instrument methods
           ensure_concerns_loaded
 
-          # Fetch LTP
-          ltp = instrument.ltp
+          # Fetch LTP using Trading::Dhan.quote (which includes last_price)
+          begin
+            quote_data = Trading::Dhan.quote(
+              security_id: instrument.security_id,
+              segment: instrument.exchange_segment
+            )
+            ltp = quote_data[:last_price] || quote_data['last_price'] || quote_data[:ltp] || quote_data['ltp']
+            return { error: 'LTP not available from API' } unless ltp
+          rescue StandardError => e
+            Rails.logger.error("[TechnicalAnalysisAgent] LTP fetch error: #{e.class} - #{e.message}")
+            return { error: "Failed to fetch LTP: #{e.message}" }
+          end
 
           # Normalize interval format (remove 'm' suffix if present)
           normalized_interval = interval.to_s.gsub(/m$/i, '')
@@ -256,13 +266,40 @@ module Services
             segment_code: segment,
             underlying_symbol: index_key
           )
-          return { error: "Instrument not found for #{index_key} (SID: #{security_id}, Segment: #{segment})" } unless instrument
+          unless instrument
+            return { error: "Instrument not found for #{index_key} (SID: #{security_id}, Segment: #{segment})" }
+          end
 
-          ltp = instrument.ltp
+          # Fetch LTP using DhanHQ::Models::MarketFeed.ltp (directly, already configured)
+          # Same pattern as app/models/concerns/instrument_helpers.rb
+          begin
+            exchange_segment = instrument.exchange_segment
+            security_id = instrument.security_id.to_i
+
+            # Use MarketFeed.ltp (simpler than quote for LTP-only)
+            ltp_params = { exchange_segment => [security_id] }
+            ltp_response = DhanHQ::Models::MarketFeed.ltp(ltp_params)
+
+            # Check response status
+            unless ltp_response.is_a?(Hash) && ltp_response['status'] == 'success'
+              return { error: 'LTP API returned non-success status' }
+            end
+
+            # Extract LTP from nested response: { "data": { "exchange_segment": { "security_id": { "last_price": value } } } }
+            ltp_data = ltp_response.dig('data', exchange_segment, security_id.to_s) ||
+                       ltp_response.dig('data', exchange_segment, security_id)
+
+            ltp = ltp_data&.dig('last_price') || ltp_data&.dig(:last_price)
+
+            return { error: 'LTP not available from API response' } unless ltp
+          rescue StandardError => e
+            Rails.logger.error("[TechnicalAnalysisAgent] LTP fetch error: #{e.class} - #{e.message}")
+            return { error: "Failed to fetch LTP: #{e.message}" }
+          end
 
           {
             index: index_key,
-            ltp: ltp,
+            ltp: ltp.to_f,
             timestamp: Time.current
           }
         end
@@ -305,8 +342,32 @@ module Services
 
           return { error: "Instrument not found: #{underlying_symbol} (#{exchange}, #{segment})" } unless instrument
 
-          ltp = instrument.ltp
-          return { error: 'LTP not available' } unless ltp
+          # Fetch LTP using DhanHQ::Models::MarketFeed.ltp (directly, already configured)
+          # Same pattern as app/models/concerns/instrument_helpers.rb
+          begin
+            exchange_segment = instrument.exchange_segment
+            security_id = instrument.security_id.to_i
+
+            # Use MarketFeed.ltp (simpler than quote for LTP-only)
+            ltp_params = { exchange_segment => [security_id] }
+            ltp_response = DhanHQ::Models::MarketFeed.ltp(ltp_params)
+
+            # Check response status
+            unless ltp_response.is_a?(Hash) && ltp_response['status'] == 'success'
+              return { error: 'LTP API returned non-success status' }
+            end
+
+            # Extract LTP from nested response: { "data": { "exchange_segment": { "security_id": { "last_price": value } } } }
+            ltp_data = ltp_response.dig('data', exchange_segment, security_id.to_s) ||
+                       ltp_response.dig('data', exchange_segment, security_id)
+
+            ltp = ltp_data&.dig('last_price') || ltp_data&.dig(:last_price)
+
+            return { error: 'LTP not available from API response' } unless ltp
+          rescue StandardError => e
+            Rails.logger.error("[TechnicalAnalysisAgent] LTP fetch error: #{e.class} - #{e.message}")
+            return { error: "Failed to fetch LTP: #{e.message}" }
+          end
 
           {
             underlying_symbol: underlying_symbol,
@@ -388,7 +449,9 @@ module Services
             segment_code: segment,
             underlying_symbol: index_key
           )
-          return { error: "Instrument not found for #{index_key} (SID: #{security_id}, Segment: #{segment})" } unless instrument
+          unless instrument
+            return { error: "Instrument not found for #{index_key} (SID: #{security_id}, Segment: #{segment})" }
+          end
 
           # Ensure Concerns::DhanhqErrorHandler is loaded before calling instrument methods
           ensure_concerns_loaded
@@ -807,4 +870,3 @@ module Services
     end
   end
 end
-

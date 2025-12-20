@@ -181,8 +181,8 @@ class TradingController < ApplicationController
     job_id = SecureRandom.uuid
 
     # Enqueue background job (non-blocking)
-    use_planning = params[:use_planning] != 'false'
-    TechnicalAnalysisJob.perform_later(job_id, user_prompt, use_planning: use_planning)
+    use_react = params[:use_react] != 'false'
+    TechnicalAnalysisJob.perform_later(job_id, user_prompt, use_react: use_react)
 
     # Return job ID immediately (non-blocking)
     render json: {
