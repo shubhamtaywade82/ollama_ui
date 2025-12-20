@@ -1,3 +1,4 @@
 web: bin/rails server
 js: npx esbuild app/javascript/*.* --bundle --sourcemap --outdir=app/assets/builds --public-path=/assets --watch
 css: npx tailwindcss -i ./app/assets/stylesheets/application.css -o ./app/assets/builds/application.css --watch
+jobs: bin/jobs

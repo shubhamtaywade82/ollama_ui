@@ -627,14 +627,22 @@ export default class extends Controller {
   }
 
   async streamTechnicalAnalysisBackground(prompt) {
-    // Start background job
+    // Get selected model
+    const model = this.hasModelTarget ? this.modelTarget.value : null;
+
+    // Use direct streaming for immediate execution (no background job)
     const res = await fetch("/trading/technical_analysis_stream", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "X-CSRF-Token": this.csrf(),
       },
-      body: JSON.stringify({ prompt, mode: this.agentMode, background: true }),
+      body: JSON.stringify({
+        prompt,
+        mode: this.agentMode,
+        background: false, // Use direct streaming for immediate execution
+        model: model,
+      }),
     });
 
     if (!res.ok) {
@@ -648,18 +656,89 @@ export default class extends Controller {
       return false;
     }
 
-    const data = await res.json();
-    const jobId = data.job_id;
-    const channelName = data.channel || `technical_analysis_${jobId}`;
+    // Check if response is SSE stream (direct streaming) or JSON (background job)
+    const contentType = res.headers.get("content-type") || "";
+    if (contentType.includes("text/event-stream")) {
+      // Direct streaming - handle SSE events
+      return this.handleDirectStream(res);
+    } else {
+      // Background job - use ActionCable
+      const data = await res.json();
+      const jobId = data.job_id;
+      const channelName = data.channel || `technical_analysis_${jobId}`;
 
-    this.appendProgressLog("Analysis queued. Connecting to updates...", "info");
+      this.appendProgressLog(
+        "Analysis queued. Connecting to updates...",
+        "info"
+      );
 
-    // Connect to ActionCable channel (with polling fallback)
+      // Connect to ActionCable channel (with polling fallback)
+      try {
+        return this.connectToActionCable(channelName, jobId);
+      } catch (err) {
+        console.warn("ActionCable not available, using polling fallback:", err);
+        return this.pollForUpdates(jobId);
+      }
+    }
+  }
+
+  async handleDirectStream(res) {
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    // Initialize progress log if not already done
+    if (!this.currentProgressLog && this.hasProgressLogTarget) {
+      this.currentProgressLog = this.progressLogTarget;
+    }
+    // Hide placeholder when starting
+    const placeholder =
+      this.progressContainerTarget?.querySelector(".text-center");
+    if (placeholder) {
+      placeholder.style.display = "none";
+    }
+
+    this.appendProgressLog("Analysis started...", "info");
+
     try {
-      return this.connectToActionCable(channelName, jobId);
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+
+          const payloadRaw = line.slice(6);
+          if (!payloadRaw.trim()) continue;
+
+          try {
+            const payload = JSON.parse(payloadRaw);
+            // Debug: log all events to see what we're receiving
+            if (
+              payload.type === "progress" ||
+              payload.type === "content" ||
+              payload.type === "start"
+            ) {
+              console.log("Received event:", payload.type, payload.data);
+            }
+            const outcome = this.handleAgentEvent(payload);
+            if (outcome === "done" || outcome === "error") {
+              return outcome === "done";
+            }
+          } catch (err) {
+            console.error("Failed to parse stream payload", err, line);
+          }
+        }
+      }
+      return true;
     } catch (err) {
-      console.warn("ActionCable not available, using polling fallback:", err);
-      return this.pollForUpdates(jobId);
+      console.error("Stream error:", err);
+      this.appendProgressLog(`Error: ${err.message}`, "error");
+      return false;
     }
   }
 

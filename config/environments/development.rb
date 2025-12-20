@@ -57,6 +57,11 @@ Rails.application.configure do
   # Highlight code that enqueued background job in logs.
   config.active_job.verbose_enqueue_logs = true
 
+  # Configure Solid Queue for development (use same database as main app)
+  config.active_job.queue_adapter = :solid_queue
+  # In development, use the same database (no separate queue database)
+  # config.solid_queue.connects_to is not set, so it uses the default connection
+
   # Raises error for missing translations.
   # config.i18n.raise_on_missing_translations = true
 

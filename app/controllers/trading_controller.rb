@@ -153,14 +153,20 @@ class TradingController < ApplicationController
   end
 
   def technical_analysis_stream
-    # Check if background execution is enabled (default: true to avoid blocking)
-    use_background = params[:background] != 'false' && ENV.fetch('AI_USE_BACKGROUND_JOBS', 'true') == 'true'
+    # Check if background execution is requested
+    # Default to direct streaming (immediate execution) unless explicitly requested
+    background_param = params[:background]
+    use_background = background_param == if background_param.is_a?(String)
+                                           'true'
+                                         else
+                                           true
+                                         end
 
     if use_background
       # Background execution via ActiveJob (non-blocking)
       technical_analysis_background
     else
-      # Direct streaming (blocks web server - use only if background is disabled)
+      # Direct streaming (immediate execution)
       technical_analysis_stream_direct
     end
   end
@@ -208,6 +214,9 @@ class TradingController < ApplicationController
         return
       end
 
+      # Get model from params (optional, defaults to agent's selected model)
+      model = params[:model].to_s.presence
+
       # Limit prompt size to prevent token bloat (max 2000 characters ≈ 500 tokens)
       max_prompt_length = ENV.fetch('AI_MAX_PROMPT_LENGTH', '2000').to_i
       if user_prompt.length > max_prompt_length
@@ -216,7 +225,7 @@ class TradingController < ApplicationController
                      { message: "⚠️ Prompt truncated to #{max_prompt_length} characters to optimize performance" })
       end
 
-      stream_technical_analysis(user_prompt)
+      stream_technical_analysis(user_prompt, model: model)
     rescue StandardError => e
       stream_event('error', { message: e.message })
     ensure
@@ -307,22 +316,33 @@ class TradingController < ApplicationController
                  })
   end
 
-  def stream_technical_analysis(user_prompt)
+  def stream_technical_analysis(user_prompt, model: nil)
     stream_event('start', { message: 'Technical Analysis Agent started' })
     stream_event('mode', { mode: 'technical_analysis' })
 
     accumulated_response = ''
 
     begin
-      Services::Ai::TechnicalAnalysisAgent.analyze(query: user_prompt, stream: true) do |chunk|
+      Services::Ai::TechnicalAnalysisAgent.analyze(query: user_prompt, stream: true, model: model) do |chunk|
         next unless chunk.present?
 
         # TechnicalAnalysisAgent streams string chunks directly
         if chunk.is_a?(String)
-          # Detect if this is a progress message (starts with emoji indicators)
-          if chunk.match?(/^[🔍📊🤔🔧⚙️✅📋💭⚠❌🏁]/)
+          # Detect if this is a progress message (short single-line status updates)
+          # Progress messages are typically short and end with newline, formatted results are multi-line
+          chunk_stripped = chunk.strip
+          is_progress = chunk_stripped.match?(/^[🔍📊🤔🔧⚙️✅📋💭⚠❌🏁⏹ℹ💡]/) &&
+                        (chunk_stripped.lines.length <= 2) &&
+                        !chunk_stripped.include?('**Analysis Result**') &&
+                        !chunk_stripped.include?('**Instrument:**') &&
+                        !chunk_stripped.include?('**Current Price:**') &&
+                        !chunk_stripped.include?('**Trend:**') &&
+                        !chunk_stripped.include?('**Verdict:**') &&
+                        !chunk_stripped.include?('**Recommendation:**')
+
+          if is_progress
             # This is a progress/log message - send to progress sidebar
-            stream_event('progress', { message: chunk.strip })
+            stream_event('progress', { message: chunk_stripped })
           else
             # This is actual content - accumulate and stream
             accumulated_response += chunk
