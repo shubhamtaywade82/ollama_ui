@@ -92,7 +92,7 @@ class OllamaClient
     request.body = body.to_json
 
     accumulated_tool_calls = []
-    
+
     http.request(request) do |response|
       response.read_body do |chunk|
         chunk.lines.each do |line|
@@ -101,50 +101,36 @@ class OllamaClient
 
           begin
             data = JSON.parse(line)
-            Rails.logger.debug { "DEBUG: Received chunk: #{data.keys.inspect}, done: #{data['done']}" }
 
             # Handle chat API response format
             if data['message']
               message = data['message']
-              
+
               # Accumulate tool calls during streaming (they might come in chunks)
               if message['tool_calls'].is_a?(Array) && message['tool_calls'].any?
                 accumulated_tool_calls.concat(message['tool_calls'])
                 Rails.logger.debug { "DEBUG: Accumulated tool calls: #{accumulated_tool_calls.length} total" }
               end
-              
-              # Log full message structure for debugging when done
-              if data['done'] == true
-                Rails.logger.debug { "DEBUG: Final message structure: #{message.keys.inspect}" }
-                Rails.logger.debug { "DEBUG: Message content: #{message['content'].inspect}" }
-                Rails.logger.debug { "DEBUG: Message tool_calls type: #{message['tool_calls'].class}, value: #{message['tool_calls'].inspect}" }
-                if message['tool_calls'].is_a?(Array)
-                  Rails.logger.debug { "DEBUG: Tool calls array length: #{message['tool_calls'].length}" }
-                  message['tool_calls'].each_with_index do |tc, idx|
-                    Rails.logger.debug { "DEBUG: Tool call #{idx}: #{tc.inspect}" }
-                  end
-                end
-              end
-              
-              Rails.logger.debug do
-                tool_calls_present = message['tool_calls'].is_a?(Array) ? message['tool_calls'].any? : message['tool_calls'].present?
-                "DEBUG: Message content present: #{message['content'].present?}, tool_calls present: #{tool_calls_present}"
+
+              # Log important info only when done
+              if (data['done'] == true) && message['tool_calls'].is_a?(Array) && message['tool_calls'].any?
+                Rails.logger.debug { "DEBUG: Final tool_calls: #{message['tool_calls'].length} calls" }
               end
 
-              # Stream content
-              if message['content'].present?
-                content = message['content']
-                Rails.logger.debug { "DEBUG: Streaming content chunk: #{content[0..100]}..." }
-                yield({ type: 'content', text: content })
-              end
+              # Stream content (no per-chunk logging)
+              yield({ type: 'content', text: message['content'] }) if message['content'].present?
 
               # Handle structured tool calls (yield when done with all accumulated tool calls)
               if data['done'] == true
                 # Use accumulated tool calls if available, otherwise check final message
-                final_tool_calls = accumulated_tool_calls.any? ? accumulated_tool_calls : (message['tool_calls'] if message['tool_calls'].is_a?(Array))
-                
+                final_tool_calls = if accumulated_tool_calls.any?
+                                     accumulated_tool_calls
+                                   else
+                                     (message['tool_calls'] if message['tool_calls'].is_a?(Array))
+                                   end
+
                 if final_tool_calls && final_tool_calls.any?
-                  Rails.logger.debug { "DEBUG: Yielding accumulated tool_calls: #{final_tool_calls.inspect}" }
+                  Rails.logger.debug { "DEBUG: Yielding #{final_tool_calls.length} tool_calls" }
                   yield({ type: 'tool_calls', tool_calls: final_tool_calls })
                 end
               end
@@ -158,7 +144,7 @@ class OllamaClient
                   tool_name = tool_call_match[1]
                   begin
                     tool_args = JSON.parse(tool_call_match[2])
-                    Rails.logger.debug { "DEBUG: Extracted tool call from final content: #{tool_name}" }
+                    Rails.logger.debug { "DEBUG: Extracted tool call from content: #{tool_name}" }
                     yield({ type: 'tool_calls', tool_calls: [{
                       function: {
                         name: tool_name,
@@ -172,12 +158,9 @@ class OllamaClient
               end
             end
 
-            if data['done'] == true
-              Rails.logger.debug 'DEBUG: Chat stream complete'
-              break
-            end
+            break if data['done'] == true
           rescue JSON::ParserError => e
-            Rails.logger.debug { "DEBUG: Parse error: #{e.message}, line: #{line[0..200]}" }
+            Rails.logger.debug { "DEBUG: Parse error: #{e.message}" }
           end
         end
       end

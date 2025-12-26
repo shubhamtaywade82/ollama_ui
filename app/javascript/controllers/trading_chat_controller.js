@@ -217,17 +217,17 @@ export default class extends Controller {
     const setupHandler = (textarea) => {
       if (!textarea) return;
       textarea.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
           // Find the closest form and trigger submit
           const form = textarea.closest("form");
-        if (form) {
-          form.dispatchEvent(
-            new Event("submit", { bubbles: true, cancelable: true })
-          );
+          if (form) {
+            form.dispatchEvent(
+              new Event("submit", { bubbles: true, cancelable: true })
+            );
+          }
         }
-      }
-    });
+      });
     };
 
     // Setup for both textareas
@@ -421,7 +421,7 @@ export default class extends Controller {
     this.accumulatedText = "";
     this.accumulatedContent = ""; // Reset for technical analysis mode
     this.progressEntries = []; // Reset progress entries
-    const prompt = this.currentPromptTextarea.value;
+    const prompt = this.currentPromptTextarea.value.trim(); // Trim spaces from start and end
 
     // Clear progress sidebar and show placeholder
     if (this.hasProgressLogTarget) {
@@ -435,10 +435,16 @@ export default class extends Controller {
       }
     }
 
-    if (!prompt.trim()) {
+    if (!prompt) {
       alert("Please enter a message.");
       return;
     }
+
+    // Clear the textarea
+    this.currentPromptTextarea.value = "";
+    const minHeight =
+      this.currentPromptTextarea === this.promptCenteredTarget ? 24 : 32;
+    this.resizeTextarea(this.currentPromptTextarea, minHeight);
 
     // Disable the appropriate button and textarea
     this.currentSendBtn =
@@ -517,10 +523,7 @@ export default class extends Controller {
 
       if (this.currentPromptTextarea) {
         this.currentPromptTextarea.disabled = false;
-        this.currentPromptTextarea.value = "";
-      // Reset textarea height after clearing
-        const minHeight =
-          this.currentPromptTextarea === this.promptCenteredTarget ? 24 : 32;
+        // Textarea is already cleared in submit() before sending
         this.resizeTextarea(this.currentPromptTextarea, minHeight);
       }
     }
@@ -663,21 +666,21 @@ export default class extends Controller {
       return this.handleDirectStream(res);
     } else {
       // Background job - use ActionCable
-    const data = await res.json();
-    const jobId = data.job_id;
-    const channelName = data.channel || `technical_analysis_${jobId}`;
+      const data = await res.json();
+      const jobId = data.job_id;
+      const channelName = data.channel || `technical_analysis_${jobId}`;
 
       this.appendProgressLog(
         "Analysis queued. Connecting to updates...",
         "info"
       );
 
-    // Connect to ActionCable channel (with polling fallback)
-    try {
-      return this.connectToActionCable(channelName, jobId);
-    } catch (err) {
-      console.warn("ActionCable not available, using polling fallback:", err);
-      return this.pollForUpdates(jobId);
+      // Connect to ActionCable channel (with polling fallback)
+      try {
+        return this.connectToActionCable(channelName, jobId);
+      } catch (err) {
+        console.warn("ActionCable not available, using polling fallback:", err);
+        return this.pollForUpdates(jobId);
       }
     }
   }
@@ -820,9 +823,9 @@ export default class extends Controller {
         const res = await fetch(
           `/trading/technical_analysis_status/${jobId}?last_event=${lastEventId}`,
           {
-          headers: {
-            "X-CSRF-Token": this.csrf(),
-          },
+            headers: {
+              "X-CSRF-Token": this.csrf(),
+            },
           }
         );
 

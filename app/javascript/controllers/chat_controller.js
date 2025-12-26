@@ -204,12 +204,20 @@ export default class extends Controller {
     }
 
     const model = this.modelTarget.value;
-    const prompt = promptTextarea.value;
+    const prompt = promptTextarea.value.trim(); // Trim spaces from start and end
 
-    if (!model || !prompt.trim()) {
+    if (!model || !prompt) {
       alert("Please choose a model and enter a prompt.");
       return;
     }
+
+    // Clear the textarea
+    promptTextarea.value = "";
+    this.resizeTextarea(
+      promptTextarea,
+      promptTextarea === this.promptCenteredTarget ? 24 : 32,
+      promptTextarea === this.promptCenteredTarget ? 192 : 128
+    );
 
     // Hide welcome screen and show messages/bottom input on first submission
     if (!this.hasMessages && this.hasWelcomeScreenTarget) {
@@ -236,7 +244,7 @@ export default class extends Controller {
     // Scroll to bottom
     this.scrollToBottom();
 
-    // Store in history
+    // Store in history (using trimmed prompt)
     this.conversationHistory.push({ role: "user", content: prompt });
 
     // Get deep mode state
@@ -363,14 +371,7 @@ export default class extends Controller {
       if (sendBtn) sendBtn.disabled = false;
       if (promptTextarea) {
         promptTextarea.disabled = false;
-        promptTextarea.value = "";
-
-        // Reset textarea height after clearing
-        this.resizeTextarea(
-          promptTextarea,
-          promptTextarea === this.promptCenteredTarget ? 24 : 32,
-          promptTextarea === this.promptCenteredTarget ? 192 : 128
-        );
+        // Textarea is already cleared in submit() before sending
       }
 
       // Store response in history (filter out tool call JSON)
@@ -409,29 +410,29 @@ export default class extends Controller {
 
     const messageDiv = document.createElement("div");
     messageDiv.className =
-      "mb-4 flex " + (role === "user" ? "justify-end" : "justify-start");
+      "mb-5 flex animate-fade-in " + (role === "user" ? "justify-end" : "justify-start");
 
     const isAI = role === "assistant";
     const avatarBg = isAI
-      ? 'style="background-color: var(--accent-primary);"'
-      : 'style="background: linear-gradient(to right, var(--accent-primary), var(--accent-secondary));"';
+      ? 'style="background-color: var(--accent-primary); border: 2px solid var(--accent-primary);"'
+      : 'style="background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary)); border: 2px solid transparent;"';
     const messageBg = isAI
-      ? `style="background-color: var(--bg-secondary); color: var(--text-primary);"`
-      : `style="background: linear-gradient(to right, var(--accent-primary), var(--accent-secondary)); color: white;"`;
+      ? `style="background-color: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary);"`
+      : `style="background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary)); color: white; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);"`;
 
     messageDiv.innerHTML = `
-      <div class="flex gap-3 max-w-[85%] ${
+      <div class="flex gap-3 max-w-[90%] sm:max-w-[85%] ${
         role === "user" ? "flex-row-reverse" : ""
       }">
-        <div class="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center" ${avatarBg}>
+        <div class="flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center text-sm transition-transform hover:scale-110" ${avatarBg}>
           ${isAI ? "🤖" : "👤"}
         </div>
-        <div class="rounded-2xl px-4 py-3 shadow-sm ${
+        <div class="rounded-2xl px-4 py-3 shadow-md hover:shadow-lg transition-all duration-200 ${
           isAI ? "prose prose-sm max-w-none" : ""
         }" ${messageBg}>
           <div class="message-content ${
-            isAI ? "" : "whitespace-pre-wrap"
-          }" style="color: var(--text-primary);">
+            isAI ? "text-sm leading-relaxed" : "whitespace-pre-wrap text-sm leading-relaxed"
+          }" style="${isAI ? "color: var(--text-primary) !important;" : "color: white;"}">
             ${content}
           </div>
         </div>

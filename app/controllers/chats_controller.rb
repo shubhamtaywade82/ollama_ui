@@ -32,7 +32,7 @@ class ChatsController < ApplicationController
 
   def stream
     model  = params[:model].to_s
-    prompt = params[:prompt].to_s
+    prompt = params[:prompt].to_s.strip # Trim spaces from start and end
     deep_mode = ['true', true].include?(params[:deep_mode])
     messages = params[:messages] || [] # Conversation history
 
@@ -69,7 +69,7 @@ class ChatsController < ApplicationController
     # Build conversation history
     conversation_messages = messages.dup || []
 
-    # Add current prompt as user message if provided
+    # Add current prompt as user message if provided (already trimmed)
     conversation_messages << { role: 'user', content: prompt } if prompt.present?
 
     # Define web search tool for Ollama
@@ -113,7 +113,6 @@ class ChatsController < ApplicationController
 
       # Stream chat with tools - collect full response
       client.chat_stream(model: model, messages: conversation_messages, tools: tools_to_use) do |chunk|
-        Rails.logger.debug { "DEBUG: Received chunk type: #{chunk[:type]}" }
         case chunk[:type]
         when 'content'
           # Accumulate all content (we'll check for tool calls after stream completes)
@@ -121,7 +120,6 @@ class ChatsController < ApplicationController
             assistant_message_content += chunk[:text]
             accumulated_content += chunk[:text]
             stream_event('content', { text: chunk[:text] })
-            Rails.logger.debug { "DEBUG: Streamed content chunk (#{chunk[:text].length} chars)" }
           end
 
         when 'tool_calls'
@@ -129,12 +127,12 @@ class ChatsController < ApplicationController
           tool_calls = chunk[:tool_calls] || []
           tool_calls_received = true
           current_tool_calls = tool_calls
-          Rails.logger.debug { "DEBUG: Received structured tool_calls: #{tool_calls.inspect}" }
+          Rails.logger.debug { "DEBUG: Received #{tool_calls.length} tool_calls" }
         end
       end
 
       Rails.logger.debug do
-        "DEBUG: Stream complete. Content length: #{assistant_message_content.length}, tool_calls_received: #{tool_calls_received}"
+        "DEBUG: Stream complete. Content: #{assistant_message_content.length} chars, Tool calls: #{tool_calls_received}"
       end
 
       # Check if content contains a tool call (some models output tool calls as JSON text)
