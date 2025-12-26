@@ -341,27 +341,56 @@ export default class extends Controller {
   }
 
   async loadAccountInfo() {
+    // Set timeout for the request (5 seconds)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
     try {
-      const res = await fetch("/trading/account");
+      const res = await fetch("/trading/account", {
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+
       const data = await res.json();
 
       if (data.error) {
         this.accountInfoTarget.textContent = "Demo Mode (No API Keys)";
-        this.accountValueTarget.textContent = "$0.00";
+        this.accountValueTarget.textContent = "₹0.00";
       } else {
         this.accountInfoTarget.textContent = `${
           data.account_status || "Demo"
         } Account`;
-        this.accountValueTarget.textContent = `$${parseFloat(
+        this.accountValueTarget.textContent = `₹${parseFloat(
           data.equity || 0
-        ).toLocaleString("en-US", {
+        ).toLocaleString("en-IN", {
           minimumFractionDigits: 2,
           maximumFractionDigits: 2,
         })}`;
       }
     } catch (e) {
-      this.accountInfoTarget.textContent = "Offline";
-      this.accountValueTarget.textContent = "$0.00";
+      clearTimeout(timeoutId);
+
+      // Handle different error types
+      if (e.name === "AbortError") {
+        this.accountInfoTarget.textContent = "Timeout";
+        this.accountValueTarget.textContent = "N/A";
+      } else if (
+        e.message?.includes("Failed to fetch") ||
+        e.message?.includes("NetworkError")
+      ) {
+        this.accountInfoTarget.textContent = "Offline";
+        this.accountValueTarget.textContent = "₹0.00";
+      } else {
+        this.accountInfoTarget.textContent = "Demo Mode";
+        this.accountValueTarget.textContent = "₹0.00";
+      }
+
+      console.error("Failed to load account info:", e);
     }
   }
 

@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require 'timeout'
+
 class TradingController < ApplicationController
   include ActionController::Live
 
@@ -11,20 +13,45 @@ class TradingController < ApplicationController
   end
 
   def account_info
-    fund = DhanHQ::Models::Funds.fetch
+    # Check if DhanHQ is configured by checking environment variables
+    # Support multiple naming conventions used in the codebase
+    client_id = ENV['DHAN_CLIENT_ID'].presence || ENV['DHANHQ_CLIENT_ID'].presence || ENV['CLIENT_ID'].presence
+    access_token = ENV['DHAN_ACCESS_TOKEN'].presence || ENV['DHANHQ_ACCESS_TOKEN'].presence || ENV['ACCESS_TOKEN'].presence
 
+    unless client_id && access_token
+      return render json: {
+        error: 'DhanHQ API not configured. Please set DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN environment variables.',
+        demo: true
+      }, status: :service_unavailable
+    end
+
+    # Set timeout for the API call
+    Timeout.timeout(4) do
+      fund = DhanHQ::Models::Funds.fetch
+
+      render json: {
+        equity: fund.available_balance.to_f,
+        buying_power: fund.available_balance.to_f,
+        cash: fund.available_balance.to_f,
+        collateral: fund.collateral_amount.to_f,
+        utilized: fund.utilized_amount.to_f,
+        withdrawable: fund.withdrawable_balance.to_f,
+        account_status: 'ACTIVE',
+        broker: 'DhanHQ'
+      }
+    end
+  rescue Timeout::Error
+    Rails.logger.error 'Account info request timed out'
     render json: {
-      equity: fund.available_balance.to_f,
-      buying_power: fund.available_balance.to_f,
-      cash: fund.available_balance.to_f,
-      collateral: fund.collateral_amount.to_f,
-      utilized: fund.utilized_amount.to_f,
-      withdrawable: fund.withdrawable_balance.to_f,
-      account_status: 'ACTIVE',
-      broker: 'DhanHQ'
-    }
+      error: 'Request timed out. Please check your DhanHQ API connection.',
+      demo: true
+    }, status: :gateway_timeout
   rescue StandardError => e
-    render json: { error: e.message }, status: :bad_gateway
+    Rails.logger.error "Account info error: #{e.class} - #{e.message}"
+    render json: {
+      error: e.message,
+      demo: true
+    }, status: :bad_gateway
   end
 
   def positions

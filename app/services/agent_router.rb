@@ -19,6 +19,10 @@ class AgentRouter
   def self.should_use_agent?(prompt, deep_mode: false)
     prompt_lower = prompt.downcase
 
+    # Exclude documentation/configuration queries early
+    # These should never go to technical analysis agent
+    return :direct if documentation_query?(prompt, prompt_lower)
+
     # Check if query has a specific symbol/instrument name
     has_symbol = extract_symbol_from_prompt(prompt)
 
@@ -36,46 +40,81 @@ class AgentRouter
     :direct
   end
 
+  def self.documentation_query?(prompt, prompt_lower)
+    # Check for documentation/configuration keywords
+    doc_keywords = %w[
+      config.yaml config.json yaml json documentation reference guide
+      api documentation http https url ssl certificate proxy
+      mcp server model context protocol continue.dev
+      docker exec ollama list models provider roles
+      autocomplete embed rerank summarize
+    ]
+
+    # If prompt contains multiple documentation keywords, it's likely a doc query
+    doc_keyword_count = doc_keywords.count { |kw| prompt_lower.include?(kw) }
+
+    # Also check for patterns like "config.yaml reference", "documentation", etc.
+    doc_patterns = [
+      /config\.(yaml|json)/i,
+      /documentation|reference|guide/i,
+      /continue\.dev/i,
+      /docker\s+exec/i,
+      /ollama\s+list/i
+    ]
+
+    has_doc_pattern = doc_patterns.any? { |pattern| prompt.match?(pattern) }
+
+    # If we have 2+ doc keywords or a clear doc pattern, it's a documentation query
+    doc_keyword_count >= 2 || has_doc_pattern
+  end
+
   def self.extract_symbol_from_prompt(prompt)
     return nil if prompt.blank?
 
     prompt_upper = prompt.upcase
 
-    # Check for known indices
-    return 'NIFTY' if prompt_upper.include?('NIFTY')
-    return 'BANKNIFTY' if prompt_upper.include?('BANKNIFTY')
-    return 'SENSEX' if prompt_upper.include?('SENSEX')
-
-    # Check for common stock symbols
-    known_stocks = %w[RELIANCE TCS INFY HDFC ICICI SBI AXIS WIPRO BAJAJ LT MARUTI TITAN]
-    known_stocks.each do |stock|
-      return stock if prompt_upper.include?(stock)
+    # Check for known indices first (common ones)
+    known_indices = %w[NIFTY BANKNIFTY SENSEX]
+    known_indices.each do |index|
+      return index if prompt_upper.include?(index) && symbol_exists_in_database?(index)
     end
 
-    # Exclude technical indicator names (these are not stock symbols)
-    indicator_names = %w[RSI MACD ADX ATR EMA SMA BOLLINGER SUPER TREND]
-    is_indicator = indicator_names.any? { |ind| prompt_upper.include?(ind) }
+    # Extract potential symbols from prompt (3-10 uppercase letters)
+    potential_symbols = prompt_upper.scan(/\b([A-Z]{3,10})\b/).flatten.uniq
 
-    # Only extract symbol if it's not an indicator explanation/query
-    # Look for patterns like "explain RSI", "what is MACD", "how does ADX work"
-    explanation_patterns = /\b(explain|what is|how does|define|describe|tell me about)\s+[A-Z]{2,10}/i
-    is_explanation = prompt.match?(explanation_patterns)
+    # Check each potential symbol against database
+    potential_symbols.each do |potential_symbol|
+      # Skip if it's a known indicator or documentation keyword
+      next if skip_symbol?(potential_symbol)
 
-    # If it's an explanation about an indicator, don't treat it as a symbol
-    return nil if is_indicator && is_explanation
-
-    # Try to extract uppercase word that looks like a symbol (3-10 chars)
-    # But skip if it's a known indicator name
-    symbol_match = prompt.match(/\b([A-Z]{3,10})\b/)
-    if symbol_match
-      potential_symbol = symbol_match[1]
-      # Don't treat indicator names as symbols
-      return nil if indicator_names.any? { |ind| potential_symbol.include?(ind) || ind.include?(potential_symbol) }
-
-      return potential_symbol
+      # Check if symbol exists in database using LIKE query
+      return potential_symbol if symbol_exists_in_database?(potential_symbol)
     end
 
     nil
+  end
+
+  def self.skip_symbol?(symbol)
+    # Exclude technical indicator names (these are not stock symbols)
+    indicator_names = %w[RSI MACD ADX ATR EMA SMA BOLLINGER SUPER TREND]
+    return true if indicator_names.any? { |ind| symbol.include?(ind) || ind.include?(symbol) }
+
+    # Exclude documentation/configuration keywords
+    documentation_keywords = %w[CONFIG YAML JSON API HTTP HTTPS URL SSL MCP NODE ENV PORT]
+    return true if documentation_keywords.any? { |kw| symbol.include?(kw) || kw.include?(symbol) }
+
+    false
+  end
+
+  def self.symbol_exists_in_database?(symbol)
+    return false unless defined?(Instrument) && Instrument.table_exists?
+
+    # Check if symbol exists in underlying_symbol or symbol_name
+    Instrument.where('UPPER(underlying_symbol) LIKE ? OR UPPER(symbol_name) LIKE ?', "%#{symbol}%", "%#{symbol}%")
+              .exists?
+  rescue StandardError => e
+    Rails.logger.error "Failed to check symbol in database: #{e.message}"
+    false
   end
 
   def self.trading_related?(prompt_lower)
@@ -84,5 +123,43 @@ class AgentRouter
 
   def self.technical_analysis_related?(prompt_lower)
     TECHNICAL_ANALYSIS_KEYWORDS.any? { |keyword| prompt_lower.include?(keyword) }
+  end
+
+  # Get all valid symbols from Instrument model (cached for performance)
+  def self.get_valid_symbols
+    return @valid_symbols_cache if @valid_symbols_cache
+
+    @valid_symbols_cache = if defined?(Instrument) && Instrument.table_exists?
+                             load_symbols_from_database
+                           else
+                             [].to_set
+                           end
+  end
+
+  def self.load_symbols_from_database
+    # Get unique underlying_symbols and symbol_names from database
+    symbols = Instrument.where.not(underlying_symbol: [nil, ''])
+                        .distinct
+                        .pluck(:underlying_symbol)
+                        .compact
+                        .map(&:upcase)
+
+    symbol_names = Instrument.where.not(symbol_name: [nil, ''])
+                             .distinct
+                             .pluck(:symbol_name)
+                             .compact
+                             .map(&:upcase)
+
+    # Combine and deduplicate, then convert to Set for fast lookup
+    (symbols + symbol_names).uniq.to_set
+  rescue StandardError => e
+    Rails.logger.error "Failed to load valid symbols: #{e.message}"
+    # Fallback to common symbols if database query fails
+    %w[NIFTY BANKNIFTY SENSEX RELIANCE TCS INFY HDFC ICICI SBI AXIS WIPRO BAJAJ LT MARUTI TITAN].to_set
+  end
+
+  # Clear the cache (useful for testing or when instruments are updated)
+  def self.clear_symbol_cache!
+    @valid_symbols_cache = nil
   end
 end
