@@ -234,8 +234,9 @@ export default class extends Controller {
     if (sendBtn) sendBtn.disabled = true;
     promptTextarea.disabled = true;
 
-    // Add user message
+    // Add user message (store raw content for copying)
     const userMessage = this.addMessage("user", prompt);
+    userMessage.dataset.rawContent = prompt;
 
     // Add empty AI message for streaming
     const aiMessage = this.addMessage("assistant", "");
@@ -288,26 +289,22 @@ export default class extends Controller {
             try {
               const data = JSON.parse(line.slice(6));
               if (data.type === "content" && data.text) {
-                // Filter out tool call JSON from display
-                let cleanText = data.text.replace(
-                  /\{\s*"name"\s*:\s*"web_search"\s*,\s*"arguments"\s*:\s*\{[^}]*\}\s*\}/g,
-                  ""
+                // Append to the accumulated text
+                if (!this.accumulatedText) this.accumulatedText = "";
+                this.accumulatedText += data.text;
+
+                // Format and update the current AI message
+                const formattedContent = this.formatMessageContent(
+                  this.accumulatedText
                 );
-
-                // Only process if there's actual content (not just tool call JSON)
-                if (cleanText.trim()) {
-                  // Append to the accumulated text
-                  if (!this.accumulatedText) this.accumulatedText = "";
-                  this.accumulatedText += cleanText;
-
-                  // Update the current AI message
-                  const html = marked.parse(this.accumulatedText);
-                  if (this.currentMessageElement) {
-                    this.currentMessageElement.querySelector(
-                      ".message-content"
-                    ).innerHTML = html;
-                    this.scrollToBottom();
-                  }
+                if (this.currentMessageElement) {
+                  this.currentMessageElement.querySelector(
+                    ".message-content"
+                  ).innerHTML = formattedContent;
+                  // Update raw content for copying
+                  this.currentMessageElement.dataset.rawContent =
+                    this.accumulatedText;
+                  this.scrollToBottom();
                 }
               } else if (data.type === "result" && data.text) {
                 // Result event - ensure all content is displayed
@@ -319,12 +316,17 @@ export default class extends Controller {
                   this.accumulatedText = data.text;
                 }
 
-                // Update the current AI message
-                const html = marked.parse(this.accumulatedText);
+                // Format and render the final result (with tool call formatting)
+                const formattedText = this.formatMessageContent(
+                  this.accumulatedText
+                );
                 if (this.currentMessageElement) {
                   this.currentMessageElement.querySelector(
                     ".message-content"
-                  ).innerHTML = html;
+                  ).innerHTML = formattedText;
+                  // Update raw content for copying
+                  this.currentMessageElement.dataset.rawContent =
+                    this.accumulatedText;
                   this.scrollToBottom();
                 }
               } else if (data.type === "info" && data.text) {
@@ -395,6 +397,149 @@ export default class extends Controller {
     }
   }
 
+  formatMessageContent(text) {
+    if (!text) return "";
+
+    // Extract and format tool calls - handle nested JSON objects properly
+    // Pattern: {"name": "tool_name", "arguments": {...}}
+    let formattedText = text;
+    const matches = [];
+
+    // Find tool call patterns by looking for the structure and parsing the full JSON
+    // This approach finds the start of a tool call and then tries to parse the complete JSON
+    const toolCallStartPattern =
+      /\{\s*"name"\s*:\s*"(\w+)"\s*,\s*"arguments"\s*:\s*\{/g;
+    let match;
+
+    while ((match = toolCallStartPattern.exec(text)) !== null) {
+      const startIndex = match.index;
+      const toolName = match[1];
+
+      // Try to find the complete JSON object by finding matching braces
+      let braceCount = 0;
+      let inString = false;
+      let escapeNext = false;
+      let endIndex = startIndex;
+
+      for (let i = startIndex; i < text.length; i++) {
+        const char = text[i];
+
+        if (escapeNext) {
+          escapeNext = false;
+          continue;
+        }
+
+        if (char === "\\") {
+          escapeNext = true;
+          continue;
+        }
+
+        if (char === '"' && !escapeNext) {
+          inString = !inString;
+          continue;
+        }
+
+        if (!inString) {
+          if (char === "{") braceCount++;
+          if (char === "}") {
+            braceCount--;
+            if (braceCount === 0) {
+              endIndex = i + 1;
+              break;
+            }
+          }
+        }
+      }
+
+      if (endIndex > startIndex) {
+        const fullMatch = text.substring(startIndex, endIndex);
+        try {
+          const parsed = JSON.parse(fullMatch);
+          if (parsed.name && parsed.arguments) {
+            matches.push({
+              fullMatch: fullMatch,
+              name: toolName,
+              arguments: parsed.arguments,
+              index: startIndex,
+            });
+          }
+        } catch (e) {
+          // If parsing fails, skip this match
+        }
+      }
+    }
+
+    // Replace tool calls with formatted components (in reverse order to preserve indices)
+    matches.reverse().forEach((toolCall) => {
+      try {
+        const args = JSON.parse(toolCall.arguments);
+        const formattedToolCall = this.createToolCallComponent(
+          toolCall.name,
+          args
+        );
+        formattedText =
+          formattedText.substring(0, toolCall.index) +
+          formattedToolCall +
+          formattedText.substring(toolCall.index + toolCall.fullMatch.length);
+      } catch (e) {
+        // If JSON parsing fails, just remove the tool call
+        formattedText = formattedText.replace(toolCall.fullMatch, "");
+      }
+    });
+
+    // Process markdown for the remaining content
+    return marked.parse(formattedText);
+  }
+
+  createToolCallComponent(toolName, args) {
+    const toolIcons = {
+      web_search: "🔍",
+      get_quote: "📊",
+      get_ohlc: "📈",
+      search_instrument: "🔎",
+      get_historical: "📉",
+      get_option_chain: "⚡",
+    };
+    const icon = toolIcons[toolName] || "🔧";
+    const argsStr = JSON.stringify(args, null, 2);
+    const uniqueId = `tool-call-${Date.now()}-${Math.random()
+      .toString(36)
+      .substr(2, 9)}`;
+
+    return `
+      <div class="tool-call-display my-2 rounded-lg overflow-hidden transition-all duration-200"
+           style="border: 1px solid var(--border-color); background-color: var(--bg-tertiary);">
+        <button type="button" class="tool-call-header w-full px-3 py-2 flex items-center justify-between text-left hover:opacity-80 transition-opacity cursor-pointer"
+                onclick="const content = this.nextElementSibling; const arrow = this.querySelector('.tool-call-arrow'); content.classList.toggle('hidden'); arrow.classList.toggle('rotate-180');"
+                style="background-color: var(--bg-secondary); border: none;">
+          <div class="flex items-center gap-2">
+            <span class="text-base">${icon}</span>
+            <span class="text-xs font-semibold" style="color: var(--text-primary);">Calling: <code style="background-color: var(--bg-tertiary); padding: 0.125rem 0.25rem; border-radius: 0.25rem;">${this.escapeHtml(
+              toolName
+            )}</code></span>
+          </div>
+          <svg class="tool-call-arrow w-4 h-4 transition-transform duration-200" style="color: var(--text-secondary);" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+          </svg>
+        </button>
+        <div class="tool-call-content hidden px-3 py-2">
+          <div class="text-xs" style="color: var(--text-secondary);">
+            <div class="text-xs font-medium mb-1" style="color: var(--text-primary);">Arguments:</div>
+            <pre class="whitespace-pre-wrap text-xs overflow-x-auto" style="color: var(--text-primary); background-color: var(--bg-primary); padding: 0.5rem; border-radius: 0.25rem; border: 1px solid var(--border-color);">${this.escapeHtml(
+              argsStr
+            )}</pre>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  escapeHtml(text) {
+    const div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
   addMessage(role, content) {
     // Show messages container and hide welcome screen if this is the first message
     if (!this.hasMessages && this.hasWelcomeScreenTarget) {
@@ -410,7 +555,8 @@ export default class extends Controller {
 
     const messageDiv = document.createElement("div");
     messageDiv.className =
-      "mb-5 flex animate-fade-in " + (role === "user" ? "justify-end" : "justify-start");
+      "mb-5 flex animate-fade-in " +
+      (role === "user" ? "justify-end" : "justify-start");
 
     const isAI = role === "assistant";
     const avatarBg = isAI
@@ -420,6 +566,10 @@ export default class extends Controller {
       ? `style="background-color: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary);"`
       : `style="background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary)); color: white; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);"`;
 
+    const messageId = `message-${Date.now()}-${Math.random()
+      .toString(36)
+      .substr(2, 9)}`;
+
     messageDiv.innerHTML = `
       <div class="flex gap-3 max-w-[90%] sm:max-w-[85%] ${
         role === "user" ? "flex-row-reverse" : ""
@@ -427,22 +577,117 @@ export default class extends Controller {
         <div class="flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center text-sm transition-transform hover:scale-110" ${avatarBg}>
           ${isAI ? "🤖" : "👤"}
         </div>
-        <div class="rounded-2xl px-4 py-3 shadow-md hover:shadow-lg transition-all duration-200 ${
-          isAI ? "prose prose-sm max-w-none" : ""
-        }" ${messageBg}>
-          <div class="message-content ${
-            isAI ? "text-sm leading-relaxed" : "whitespace-pre-wrap text-sm leading-relaxed"
-          }" style="${isAI ? "color: var(--text-primary) !important;" : "color: white;"}">
-            ${content}
+        <div class="flex-1 relative group">
+          <div class="rounded-2xl px-4 py-3 shadow-md hover:shadow-lg transition-all duration-200 ${
+            isAI ? "prose prose-sm max-w-none" : ""
+          }" ${messageBg}>
+            <div class="message-content ${
+              isAI
+                ? "text-sm leading-relaxed"
+                : "whitespace-pre-wrap text-sm leading-relaxed"
+            }" style="${
+      isAI ? "color: var(--text-primary) !important;" : "color: white;"
+    }">
+              ${
+                isAI
+                  ? this.formatMessageContent(content)
+                  : this.escapeHtml(content)
+              }
+            </div>
           </div>
+          <!-- Copy Button -->
+          <button
+            type="button"
+            class="copy-button absolute top-2 ${
+              role === "user" ? "left-2" : "right-2"
+            } opacity-0 group-hover:opacity-100 transition-opacity duration-200 p-1.5 rounded-md hover:scale-110 active:scale-95"
+            style="background-color: var(--bg-tertiary); border: 1px solid var(--border-color);"
+            data-message-id="${messageId}"
+            title="Copy to clipboard"
+            aria-label="Copy message">
+            <svg class="w-3.5 h-3.5" style="color: var(--text-primary);" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+            </svg>
+          </button>
         </div>
       </div>
     `;
 
+    // Store the raw content for copying (before formatting)
+    messageDiv.dataset.rawContent = content;
+
     if (this.hasMessagesTarget) {
       this.messagesTarget.appendChild(messageDiv);
     }
+
+    // Attach copy functionality to the button
+    const copyButton = messageDiv.querySelector(".copy-button");
+    if (copyButton) {
+      copyButton.addEventListener("click", () => {
+        this.copyMessageToClipboard(messageDiv);
+      });
+    }
+
     return messageDiv;
+  }
+
+  async copyMessageToClipboard(messageElement) {
+    try {
+      // Get the raw content (before formatting)
+      const rawContent =
+        messageElement.dataset.rawContent ||
+        messageElement.querySelector(".message-content")?.textContent ||
+        messageElement.querySelector(".message-content")?.innerText ||
+        "";
+
+      // Remove tool call components from the text (get clean text)
+      const cleanContent = rawContent
+        .replace(
+          /\{\s*"name"\s*:\s*"(\w+)"\s*,\s*"arguments"\s*:\s*\{[^}]*\}\s*\}/g,
+          ""
+        )
+        .trim();
+
+      if (!cleanContent) {
+        // If no clean content, try to get the formatted text
+        const formattedText =
+          messageElement.querySelector(".message-content")?.textContent ||
+          messageElement.querySelector(".message-content")?.innerText ||
+          "";
+        await navigator.clipboard.writeText(formattedText.trim());
+      } else {
+        await navigator.clipboard.writeText(cleanContent);
+      }
+
+      // Show feedback
+      const copyButton = messageElement.querySelector(".copy-button");
+      if (copyButton) {
+        const originalHTML = copyButton.innerHTML;
+        copyButton.innerHTML = `
+          <svg class="w-3.5 h-3.5" style="color: var(--accent-primary);" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+          </svg>
+        `;
+        copyButton.style.color = "var(--accent-primary)";
+
+        setTimeout(() => {
+          copyButton.innerHTML = originalHTML;
+          copyButton.style.color = "";
+        }, 2000);
+      }
+    } catch (err) {
+      console.error("Failed to copy:", err);
+      // Fallback for older browsers
+      const textArea = document.createElement("textarea");
+      textArea.value =
+        messageElement.querySelector(".message-content")?.textContent || "";
+      textArea.style.position = "fixed";
+      textArea.style.opacity = "0";
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textArea);
+    }
   }
 
   scrollToBottom() {

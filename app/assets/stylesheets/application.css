@@ -312,6 +312,56 @@
   opacity: 0.9;
 }
 
+/* Tool Call Display Component */
+.tool-call-display {
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-tertiary);
+  border-radius: 0.5rem;
+  overflow: hidden;
+  margin: 0.5rem 0;
+}
+
+.tool-call-header {
+  background-color: var(--bg-secondary);
+  padding: 0.5rem 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  transition: opacity 0.2s;
+  border: none;
+  width: 100%;
+  text-align: left;
+}
+
+.tool-call-header:hover {
+  opacity: 0.8;
+}
+
+.tool-call-arrow {
+  width: 1rem;
+  height: 1rem;
+  transition: transform 0.2s;
+  color: var(--text-secondary);
+}
+
+.tool-call-content {
+  padding: 0.75rem;
+  background-color: var(--bg-tertiary);
+}
+
+.tool-call-content pre {
+  margin: 0;
+  padding: 0.5rem;
+  background-color: var(--bg-primary);
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  overflow-x: auto;
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+}
+
 /* Custom Scrollbar */
 .scrollbar-thin::-webkit-scrollbar {
   width: 6px;

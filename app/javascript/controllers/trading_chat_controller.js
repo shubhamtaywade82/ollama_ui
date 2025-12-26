@@ -460,6 +460,7 @@ export default class extends Controller {
     }
 
     const userMessage = this.addMessage("user", prompt);
+    userMessage.dataset.rawContent = prompt;
     const aiMessage = this.addMessage("assistant", "");
     this.currentMessageElement = aiMessage;
 
@@ -554,6 +555,10 @@ export default class extends Controller {
     } else {
       target.innerHTML = content;
     }
+
+    // Update raw content for copying
+    this.currentMessageElement.dataset.rawContent = content;
+
     this.scrollToBottom();
   }
 
@@ -1527,18 +1532,104 @@ ACCESS_TOKEN=your_access_token</pre><p class="text-xs text-gray-500 mt-2">Get AP
         <div class="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center transition-transform duration-200 hover:scale-110" ${avatarStyle}>
           <span class="text-xs">${isAI ? "🤖" : "👤"}</span>
         </div>
-        <div class="glass-card rounded-xl px-3 py-2 shadow-sm transition-all duration-200 hover:shadow-md ${
-          isAI ? "prose prose-sm max-w-none" : ""
-        }" ${messageStyle}>
-          <div class="message-content text-xs leading-relaxed ${
-            isAI ? "" : "whitespace-pre-wrap"
-          }">${content}</div>
+        <div class="flex-1 relative group">
+          <div class="glass-card rounded-xl px-3 py-2 shadow-sm transition-all duration-200 hover:shadow-md ${
+            isAI ? "prose prose-sm max-w-none" : ""
+          }" ${messageStyle}>
+            <div class="message-content text-xs leading-relaxed ${
+              isAI ? "" : "whitespace-pre-wrap"
+            }">${content}</div>
+          </div>
+          <!-- Copy Button -->
+          <button
+            type="button"
+            class="copy-button absolute top-1.5 ${
+              role === "user" ? "left-1.5" : "right-1.5"
+            } opacity-0 group-hover:opacity-100 transition-opacity duration-200 p-1 rounded-md hover:scale-110 active:scale-95 cursor-pointer"
+            style="background-color: var(--bg-tertiary); border: 1px solid var(--border-color);"
+            title="Copy to clipboard"
+            aria-label="Copy message">
+            <svg class="w-3 h-3" style="color: var(--text-primary);" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+            </svg>
+          </button>
         </div>
       </div>
     `;
 
+    // Store the raw content for copying (before formatting)
+    messageDiv.dataset.rawContent = content;
+
     this.messagesTarget.appendChild(messageDiv);
+
+    // Attach copy functionality to the button
+    const copyButton = messageDiv.querySelector(".copy-button");
+    if (copyButton) {
+      copyButton.addEventListener("click", () => {
+        this.copyMessageToClipboard(messageDiv);
+      });
+    }
+
     return messageDiv;
+  }
+
+  async copyMessageToClipboard(messageElement) {
+    try {
+      // Get the raw content (before formatting)
+      const rawContent =
+        messageElement.dataset.rawContent ||
+        messageElement.querySelector(".message-content")?.textContent ||
+        messageElement.querySelector(".message-content")?.innerText ||
+        "";
+
+      // Remove tool call components from the text (get clean text)
+      const cleanContent = rawContent
+        .replace(
+          /\{\s*"name"\s*:\s*"(\w+)"\s*,\s*"arguments"\s*:\s*\{[^}]*\}\s*\}/g,
+          ""
+        )
+        .trim();
+
+      if (!cleanContent) {
+        // If no clean content, try to get the formatted text
+        const formattedText =
+          messageElement.querySelector(".message-content")?.textContent ||
+          messageElement.querySelector(".message-content")?.innerText ||
+          "";
+        await navigator.clipboard.writeText(formattedText.trim());
+      } else {
+        await navigator.clipboard.writeText(cleanContent);
+      }
+
+      // Show feedback
+      const copyButton = messageElement.querySelector(".copy-button");
+      if (copyButton) {
+        const originalHTML = copyButton.innerHTML;
+        copyButton.innerHTML = `
+          <svg class="w-3 h-3" style="color: var(--accent-primary);" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+          </svg>
+        `;
+        copyButton.style.color = "var(--accent-primary)";
+
+        setTimeout(() => {
+          copyButton.innerHTML = originalHTML;
+          copyButton.style.color = "";
+        }, 2000);
+      }
+    } catch (err) {
+      console.error("Failed to copy:", err);
+      // Fallback for older browsers
+      const textArea = document.createElement("textarea");
+      textArea.value =
+        messageElement.querySelector(".message-content")?.textContent || "";
+      textArea.style.position = "fixed";
+      textArea.style.opacity = "0";
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textArea);
+    }
   }
 
   scrollToBottom() {
