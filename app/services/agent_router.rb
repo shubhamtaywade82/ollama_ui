@@ -52,9 +52,28 @@ class AgentRouter
       return stock if prompt_upper.include?(stock)
     end
 
+    # Exclude technical indicator names (these are not stock symbols)
+    indicator_names = %w[RSI MACD ADX ATR EMA SMA BOLLINGER SUPER TREND]
+    is_indicator = indicator_names.any? { |ind| prompt_upper.include?(ind) }
+
+    # Only extract symbol if it's not an indicator explanation/query
+    # Look for patterns like "explain RSI", "what is MACD", "how does ADX work"
+    explanation_patterns = /\b(explain|what is|how does|define|describe|tell me about)\s+[A-Z]{2,10}/i
+    is_explanation = prompt.match?(explanation_patterns)
+
+    # If it's an explanation about an indicator, don't treat it as a symbol
+    return nil if is_indicator && is_explanation
+
     # Try to extract uppercase word that looks like a symbol (3-10 chars)
+    # But skip if it's a known indicator name
     symbol_match = prompt.match(/\b([A-Z]{3,10})\b/)
-    return symbol_match[1] if symbol_match
+    if symbol_match
+      potential_symbol = symbol_match[1]
+      # Don't treat indicator names as symbols
+      return nil if indicator_names.any? { |ind| potential_symbol.include?(ind) || ind.include?(potential_symbol) }
+
+      return potential_symbol
+    end
 
     nil
   end

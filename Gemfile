@@ -62,6 +62,7 @@ end
 # Ollama provider gem (using ruby-openai for OpenAI-compatible API)
 gem 'dotenv-rails'    # env vars in development/test
 gem 'http'            # for Ollama /api/tags endpoint
+gem 'nokogiri'        # HTML parsing for web scraping
 gem 'rack-cors'       # if you later split frontend (not required for same-origin)
 gem 'ruby-openai'     # for Ollama HTTP calls via OpenAI API compatibility
 

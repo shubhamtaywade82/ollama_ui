@@ -250,7 +250,12 @@ export default class extends Controller {
           "Content-Type": "application/json",
           "X-CSRF-Token": this.csrf(),
         },
-        body: JSON.stringify({ model, prompt, deep_mode: deepMode }),
+        body: JSON.stringify({
+          model,
+          prompt,
+          deep_mode: deepMode,
+          messages: this.conversationHistory, // Send conversation history
+        }),
       });
 
       if (!res.ok) {
@@ -275,17 +280,26 @@ export default class extends Controller {
             try {
               const data = JSON.parse(line.slice(6));
               if (data.type === "content" && data.text) {
-                // Append to the accumulated text
-                if (!this.accumulatedText) this.accumulatedText = "";
-                this.accumulatedText += data.text;
+                // Filter out tool call JSON from display
+                let cleanText = data.text.replace(
+                  /\{\s*"name"\s*:\s*"web_search"\s*,\s*"arguments"\s*:\s*\{[^}]*\}\s*\}/g,
+                  ""
+                );
 
-                // Update the current AI message
-                const html = marked.parse(this.accumulatedText);
-                if (this.currentMessageElement) {
-                  this.currentMessageElement.querySelector(
-                    ".message-content"
-                  ).innerHTML = html;
-                  this.scrollToBottom();
+                // Only process if there's actual content (not just tool call JSON)
+                if (cleanText.trim()) {
+                  // Append to the accumulated text
+                  if (!this.accumulatedText) this.accumulatedText = "";
+                  this.accumulatedText += cleanText;
+
+                  // Update the current AI message
+                  const html = marked.parse(this.accumulatedText);
+                  if (this.currentMessageElement) {
+                    this.currentMessageElement.querySelector(
+                      ".message-content"
+                    ).innerHTML = html;
+                    this.scrollToBottom();
+                  }
                 }
               } else if (data.type === "result" && data.text) {
                 // Result event - ensure all content is displayed
@@ -359,12 +373,23 @@ export default class extends Controller {
         );
       }
 
-      // Store response in history
+      // Store response in history (filter out tool call JSON)
       if (this.accumulatedText) {
-        this.conversationHistory.push({
-          role: "assistant",
-          content: this.accumulatedText,
-        });
+        // Remove tool call JSON patterns from content before storing
+        let cleanContent = this.accumulatedText
+          .replace(
+            /\{\s*"name"\s*:\s*"web_search"\s*,\s*"arguments"\s*:\s*\{[^}]*\}\s*\}/g,
+            ""
+          )
+          .trim();
+
+        // Only store if there's actual content (not just tool call JSON)
+        if (cleanContent) {
+          this.conversationHistory.push({
+            role: "assistant",
+            content: cleanContent,
+          });
+        }
       }
     }
   }

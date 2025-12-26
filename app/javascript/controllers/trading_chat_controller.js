@@ -217,17 +217,17 @@ export default class extends Controller {
     const setupHandler = (textarea) => {
       if (!textarea) return;
       textarea.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && !e.shiftKey) {
-          e.preventDefault();
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
           // Find the closest form and trigger submit
           const form = textarea.closest("form");
-          if (form) {
-            form.dispatchEvent(
-              new Event("submit", { bubbles: true, cancelable: true })
-            );
-          }
+        if (form) {
+          form.dispatchEvent(
+            new Event("submit", { bubbles: true, cancelable: true })
+          );
         }
-      });
+      }
+    });
     };
 
     // Setup for both textareas
@@ -518,7 +518,7 @@ export default class extends Controller {
       if (this.currentPromptTextarea) {
         this.currentPromptTextarea.disabled = false;
         this.currentPromptTextarea.value = "";
-        // Reset textarea height after clearing
+      // Reset textarea height after clearing
         const minHeight =
           this.currentPromptTextarea === this.promptCenteredTarget ? 24 : 32;
         this.resizeTextarea(this.currentPromptTextarea, minHeight);
@@ -663,21 +663,21 @@ export default class extends Controller {
       return this.handleDirectStream(res);
     } else {
       // Background job - use ActionCable
-      const data = await res.json();
-      const jobId = data.job_id;
-      const channelName = data.channel || `technical_analysis_${jobId}`;
+    const data = await res.json();
+    const jobId = data.job_id;
+    const channelName = data.channel || `technical_analysis_${jobId}`;
 
       this.appendProgressLog(
         "Analysis queued. Connecting to updates...",
         "info"
       );
 
-      // Connect to ActionCable channel (with polling fallback)
-      try {
-        return this.connectToActionCable(channelName, jobId);
-      } catch (err) {
-        console.warn("ActionCable not available, using polling fallback:", err);
-        return this.pollForUpdates(jobId);
+    // Connect to ActionCable channel (with polling fallback)
+    try {
+      return this.connectToActionCable(channelName, jobId);
+    } catch (err) {
+      console.warn("ActionCable not available, using polling fallback:", err);
+      return this.pollForUpdates(jobId);
       }
     }
   }
@@ -701,40 +701,49 @@ export default class extends Controller {
     this.appendProgressLog("Analysis started...", "info");
 
     try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      // Process stream continuously for real-time updates
+      const processStream = async () => {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
+          if (value) {
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
 
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
+            // Process all complete lines immediately
+            for (const line of lines) {
+              if (!line.trim()) continue; // Skip empty lines
+              if (!line.startsWith("data: ")) continue;
 
-          const payloadRaw = line.slice(6);
-          if (!payloadRaw.trim()) continue;
+              const payloadRaw = line.slice(6).trim();
+              if (!payloadRaw) continue;
 
-          try {
-            const payload = JSON.parse(payloadRaw);
-            // Debug: log all events to see what we're receiving
-            if (
-              payload.type === "progress" ||
-              payload.type === "content" ||
-              payload.type === "start"
-            ) {
-              console.log("Received event:", payload.type, payload.data);
+              try {
+                const payload = JSON.parse(payloadRaw);
+                // Debug: log all events to see what we're receiving
+                if (
+                  payload.type === "progress" ||
+                  payload.type === "content" ||
+                  payload.type === "start"
+                ) {
+                  console.log("Received event:", payload.type, payload.data);
+                }
+                const outcome = this.handleAgentEvent(payload);
+                if (outcome === "done" || outcome === "error") {
+                  return outcome === "done";
+                }
+              } catch (err) {
+                console.error("Failed to parse stream payload", err, line);
+              }
             }
-            const outcome = this.handleAgentEvent(payload);
-            if (outcome === "done" || outcome === "error") {
-              return outcome === "done";
-            }
-          } catch (err) {
-            console.error("Failed to parse stream payload", err, line);
           }
         }
-      }
-      return true;
+        return true;
+      };
+
+      return await processStream();
     } catch (err) {
       console.error("Stream error:", err);
       this.appendProgressLog(`Error: ${err.message}`, "error");
@@ -811,9 +820,9 @@ export default class extends Controller {
         const res = await fetch(
           `/trading/technical_analysis_status/${jobId}?last_event=${lastEventId}`,
           {
-            headers: {
-              "X-CSRF-Token": this.csrf(),
-            },
+          headers: {
+            "X-CSRF-Token": this.csrf(),
+          },
           }
         );
 

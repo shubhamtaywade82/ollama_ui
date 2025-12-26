@@ -8,19 +8,19 @@
           <div class="flex items-center gap-1">
             <a href="/" class="px-2 py-1 rounded text-xs font-medium transition" style="background-color: var(--accent-primary); color: white; opacity: 0.9;">Chat</a>
             <a href="/trading" class="px-2 py-1 rounded text-xs font-medium transition hover:opacity-80" data-theme-text-secondary style="color: var(--text-secondary);">Trading</a>
-          </div>
+        </div>
 
           <!-- Model Selector -->
           <div class="ml-2 flex items-center gap-2">
             <select data-chat-target="model" data-theme-bg-secondary class="rounded-md border px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:border-transparent transition" style="border-color: var(--border-color); color: var(--text-primary); background-color: var(--bg-secondary);" onfocus="this.style.setProperty('--tw-ring-color', 'var(--accent-primary)')">
-              <option>Loading models…</option>
-            </select>
+          <option>Loading models…</option>
+        </select>
             <span data-chat-target="loading" class="text-xs hidden flex items-center gap-1.5" data-theme-text-secondary style="color: var(--text-secondary);">
               <svg class="animate-spin h-3 w-3" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-              </svg>
-            </span>
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+        </span>
           </div>
 
           <!-- Model Name Display -->
@@ -29,40 +29,40 @@
               <span class="text-xs" data-theme-text-secondary style="color: var(--text-secondary);" data-chat-target="modelName">Select a model to start</span>
             </div>
 
-            <!-- Theme Switcher -->
-            <div class="relative" data-controller="theme">
+        <!-- Theme Switcher -->
+        <div class="relative" data-controller="theme">
               <button data-action="click->theme#toggleDropdown" class="p-1.5 rounded transition-all duration-200 hover:scale-110 active:scale-95" data-theme-bg-tertiary style="background-color: var(--bg-tertiary);" type="button" aria-label="Theme switcher">
                 <svg class="w-4 h-4" data-theme-text-primary style="color: var(--text-primary);" fill="currentColor" viewBox="0 0 20 20"><path d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z"/></svg>
-              </button>
+          </button>
               <div data-theme-dropdown class="hidden absolute right-0 mt-2 w-40 rounded-lg shadow-xl z-50 py-1.5 glass-card" data-theme-bg-secondary style="border: 1px solid var(--border-color);">
                 <button data-action="click->theme#switch" data-theme="light" class="w-full px-3 py-1.5 text-left text-xs hover:opacity-80 transition flex items-center gap-2" data-theme-text-primary style="color: var(--text-primary);">
                   <span class="w-3 h-3 rounded-full border" style="background: linear-gradient(135deg, #f9fafb 50%, #111827 50%); border-color: var(--border-color);"></span>
-                  Light
-                </button>
+              Light
+            </button>
                 <button data-action="click->theme#switch" data-theme="dark" class="w-full px-3 py-1.5 text-left text-xs hover:opacity-80 transition flex items-center gap-2" data-theme-text-primary style="color: var(--text-primary);">
                   <span class="w-3 h-3 rounded-full bg-gray-800 border" style="border-color: var(--border-color);"></span>
-                  Dark
-                </button>
+              Dark
+            </button>
                 <button data-action="click->theme#switch" data-theme="blue" class="w-full px-3 py-1.5 text-left text-xs hover:opacity-80 transition flex items-center gap-2" data-theme-text-primary style="color: var(--text-primary);">
                   <span class="w-3 h-3 rounded-full border" style="background: #3b82f6; border-color: var(--border-color);"></span>
-                  Blue
-                </button>
+              Blue
+            </button>
                 <button data-action="click->theme#switch" data-theme="green" class="w-full px-3 py-1.5 text-left text-xs hover:opacity-80 transition flex items-center gap-2" data-theme-text-primary style="color: var(--text-primary);">
                   <span class="w-3 h-3 rounded-full border" style="background: #10b981; border-color: var(--border-color);"></span>
-                  Green
-                </button>
+              Green
+            </button>
                 <button data-action="click->theme#switch" data-theme="purple" class="w-full px-3 py-1.5 text-left text-xs hover:opacity-80 transition flex items-center gap-2" data-theme-text-primary style="color: var(--text-primary);">
                   <span class="w-3 h-3 rounded-full border" style="background: #9333ea; border-color: var(--border-color);"></span>
-                  Purple
-                </button>
+              Purple
+            </button>
                 <button data-action="click->theme#switch" data-theme="orange" class="w-full px-3 py-1.5 text-left text-xs hover:opacity-80 transition flex items-center gap-2" data-theme-text-primary style="color: var(--text-primary);">
                   <span class="w-3 h-3 rounded-full border" style="background: #f97316; border-color: var(--border-color);"></span>
-                  Orange
-                </button>
+              Orange
+            </button>
                 <button data-action="click->theme#switch" data-theme="red" class="w-full px-3 py-1.5 text-left text-xs hover:opacity-80 transition flex items-center gap-2" data-theme-text-primary style="color: var(--text-primary);">
                   <span class="w-3 h-3 rounded-full border" style="background: #ef4444; border-color: var(--border-color);"></span>
-                  Red
-                </button>
+              Red
+            </button>
               </div>
             </div>
           </div>

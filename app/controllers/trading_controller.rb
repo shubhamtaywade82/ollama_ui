@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 class TradingController < ApplicationController
+  include ActionController::Live
+
   protect_from_forgery with: :null_session
 
   def index
@@ -205,9 +207,14 @@ class TradingController < ApplicationController
     response.headers['Content-Type'] = 'text/event-stream'
     response.headers['Cache-Control'] = 'no-cache'
     response.headers['X-Accel-Buffering'] = 'no'
+    response.headers['Connection'] = 'keep-alive'
     @stream_client_closed = false
 
     begin
+      # Send initial keep-alive comment to establish connection
+      response.stream.write(": keep-alive\n\n")
+      response.stream.flush if response.stream.respond_to?(:flush)
+
       user_prompt = params[:prompt].to_s
       if user_prompt.blank?
         stream_event('error', { message: 'Prompt cannot be blank' })
@@ -321,10 +328,14 @@ class TradingController < ApplicationController
     stream_event('mode', { mode: 'technical_analysis' })
 
     accumulated_response = ''
+    last_activity_time = Time.current
 
     begin
       Services::Ai::TechnicalAnalysisAgent.analyze(query: user_prompt, stream: true, model: model) do |chunk|
         next unless chunk.present?
+
+        # Update activity time
+        last_activity_time = Time.current
 
         # TechnicalAnalysisAgent streams string chunks directly
         if chunk.is_a?(String)
@@ -341,10 +352,10 @@ class TradingController < ApplicationController
                         !chunk_stripped.include?('**Recommendation:**')
 
           if is_progress
-            # This is a progress/log message - send to progress sidebar
+            # This is a progress/log message - send to progress sidebar immediately
             stream_event('progress', { message: chunk_stripped })
           else
-            # This is actual content - accumulate and stream
+            # This is actual content - accumulate and stream immediately
             accumulated_response += chunk
             stream_event('content', { content: chunk })
           end
@@ -369,7 +380,12 @@ class TradingController < ApplicationController
 
     event = { type: event_type.to_s, data: payload }
     response.stream.write("data: #{event.to_json}\n\n")
-    response.stream.flush if response.stream.respond_to?(:flush)
+    # Force immediate flush for real-time streaming
+    if response.stream.respond_to?(:flush)
+      response.stream.flush
+    elsif response.respond_to?(:flush)
+      response.flush
+    end
   rescue IOError, ActionController::Live::ClientDisconnected
     @stream_client_closed = true
   end
