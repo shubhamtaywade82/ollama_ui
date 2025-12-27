@@ -110,7 +110,7 @@ class AgentRouter
     return false unless defined?(Instrument) && Instrument.table_exists?
 
     # Check if symbol exists in underlying_symbol or symbol_name
-    Instrument.where('UPPER(underlying_symbol) LIKE ? OR UPPER(symbol_name) LIKE ?', "%#{symbol}%", "%#{symbol}%")
+    Instrument.where('UPPER(underlying_symbol) LIKE ? OR UPPER(symbol_name) LIKE ?', "#{symbol}", "#{symbol}")
               .exists?
   rescue StandardError => e
     Rails.logger.error "Failed to check symbol in database: #{e.message}"

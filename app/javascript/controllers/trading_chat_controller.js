@@ -538,13 +538,7 @@ export default class extends Controller {
       );
     } catch (e) {
       console.error("Trading chat error", e);
-      const errorHtml = `<span class="text-red-400">Error: ${this.escapeHtml(
-        e.message
-      )}</span>`;
-      if (this.currentMessageElement) {
-        this.currentMessageElement.querySelector(".message-content").innerHTML =
-          errorHtml;
-      }
+      this.displayError(e.message);
     } finally {
       // Enable the appropriate buttons
       if (this.currentSendBtn) {
@@ -1169,6 +1163,34 @@ export default class extends Controller {
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#39;");
+  }
+
+  displayError(errorMessage) {
+    // Display error message with proper formatting
+    const escapedMessage = this.escapeHtml(errorMessage);
+    const errorHtml = `
+      <div class="error-message flex items-start gap-2 p-3 rounded-lg border" style="background-color: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.3);">
+        <svg class="w-5 h-5 flex-shrink-0 mt-0.5" style="color: rgb(239, 68, 68);" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <div class="flex-1">
+          <div class="font-semibold mb-1" style="color: rgb(239, 68, 68);">Error</div>
+          <div class="text-sm leading-relaxed" style="color: var(--text-primary);">${escapedMessage}</div>
+        </div>
+      </div>
+    `;
+
+    if (this.currentMessageElement) {
+      this.currentMessageElement.querySelector(".message-content").innerHTML =
+        errorHtml;
+      // Store raw content for copying
+      this.currentMessageElement.dataset.rawContent = errorMessage;
+    } else {
+      const errorMessageElement = this.addMessage("assistant", errorHtml);
+      errorMessageElement.dataset.rawContent = errorMessage;
+    }
+
+    this.scrollToBottom();
   }
 
   async tryAgent(prompt) {

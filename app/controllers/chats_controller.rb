@@ -53,7 +53,10 @@ class ChatsController < ApplicationController
       stream_direct_llm(model, prompt: prompt, messages: messages)
     end
   rescue StandardError => e
-    response.stream.write("data: #{{ error: e.message }.to_json}\n\n")
+    Rails.logger.error "Chat stream error: #{e.class} - #{e.message}"
+    Rails.logger.error e.backtrace.join("\n") if e.backtrace
+    response.stream.write("data: #{{ type: 'error', text: e.message }.to_json}\n\n")
+    response.stream.flush
   ensure
     response.stream.close
   end
@@ -70,7 +73,13 @@ class ChatsController < ApplicationController
     conversation_messages = messages.dup || []
 
     # Add current prompt as user message if provided (already trimmed)
-    conversation_messages << { role: 'user', content: prompt } if prompt.present?
+    # Only add if it's not already the last message (avoid duplication)
+    if prompt.present?
+      last_message = conversation_messages.last
+      unless last_message && last_message[:role] == 'user' && last_message[:content] == prompt
+        conversation_messages << { role: 'user', content: prompt }
+      end
+    end
 
     # Define web search tool for Ollama
     tools = [
@@ -255,92 +264,59 @@ class ChatsController < ApplicationController
     response.headers['Content-Type'] = 'text/event-stream'
     response.headers['Cache-Control'] = 'no-cache'
     response.headers['X-Accel-Buffering'] = 'no'
+    response.headers['Connection'] = 'keep-alive'
 
-    # Use background job for non-blocking execution
-    job_id = SecureRandom.uuid
-    TechnicalAnalysisJob.perform_later(job_id, prompt, use_react: true)
-
-    # Stream progress from job via polling
+    # Direct streaming (immediate execution, no background job)
     stream_event('info',
                  { text: deep_mode ? '🔬 Deep Mode: Researching and analyzing...' : '🔍 Analyzing with Technical Analysis Agent...' })
 
-    # Poll for results
-    max_polls = 120 # 120 seconds max (2 minutes)
-    poll_count = 0
-    last_event_id = 0
-    accumulated_content = ''
+    accumulated_response = ''
 
-    loop do
-      sleep(0.5) # Poll every 500ms for faster updates
-      poll_count += 1
-      break if poll_count >= max_polls
+    begin
+      Services::Ai::TechnicalAnalysisAgent.analyze(query: prompt, stream: true, use_react: true) do |chunk|
+        next unless chunk.present?
 
-      events = Rails.cache.read("technical_analysis_#{job_id}_events") || []
-      new_events = events.select { |e| e[:id] > last_event_id }.sort_by { |e| e[:id] }
+        # TechnicalAnalysisAgent streams string chunks directly
+        if chunk.is_a?(String)
+          # Detect if this is a progress message (short single-line status updates)
+          chunk_stripped = chunk.strip
+          is_progress = chunk_stripped.match?(/^[🔍📊🤔🔧⚙️✅📋💭⚠❌🏁⏹ℹ💡]/) &&
+                        (chunk_stripped.lines.length <= 2) &&
+                        !chunk_stripped.include?('**Analysis Result**') &&
+                        !chunk_stripped.include?('**Instrument:**') &&
+                        !chunk_stripped.include?('**Current Price:**') &&
+                        !chunk_stripped.include?('**Trend:**') &&
+                        !chunk_stripped.include?('**Verdict:**') &&
+                        !chunk_stripped.include?('**Recommendation:**')
 
-      new_events.each do |event|
-        case event[:type]
-        when 'content'
-          content = event[:data][:content] || event[:data][:text] || ''
-          accumulated_content += content
-          stream_event('content', { text: content })
-        when 'progress'
-          # Progress messages are optional - can be shown as info if needed
-          # stream_event('info', { text: event[:data][:message] })
-        when 'result'
-          # Result event contains the full accumulated response
-          result_text = event[:data][:message] || event[:data][:formatted] || accumulated_content
-          if result_text.present?
-            # Use result text as it contains the complete formatted analysis
-            stream_event('content', { text: result_text })
-          elsif accumulated_content.present?
-            # Fallback to accumulated content if result text is empty
-            stream_event('content', { text: accumulated_content })
-          end
-          stream_event('result', { text: result_text || accumulated_content })
-          return # Done
-        when 'error'
-          stream_event('error', { text: event[:data][:message] })
-          return
-        end
-        last_event_id = event[:id]
-      end
-
-      # Check if job is complete
-      status = Rails.cache.read("technical_analysis_#{job_id}_status")
-      if status == 'completed'
-        # Final check for any remaining events (including result event)
-        events = Rails.cache.read("technical_analysis_#{job_id}_events") || []
-        events.select { |e| e[:id] > last_event_id }.each do |event|
-          case event[:type]
-          when 'content'
-            content = event[:data][:content] || event[:data][:text] || ''
-            accumulated_content += content
-            stream_event('content', { text: content })
-          when 'result'
-            result_text = event[:data][:message] || event[:data][:formatted] || accumulated_content
-            stream_event('content', { text: result_text }) if result_text.present?
-            stream_event('result', { text: result_text || accumulated_content })
-            return
-          when 'error'
-            stream_event('error', { text: event[:data][:message] })
-            return
+          if is_progress
+            # This is a progress/log message - send as info
+            stream_event('info', { text: chunk_stripped })
+          else
+            # This is actual content - accumulate and stream immediately
+            accumulated_response += chunk
+            stream_event('content', { text: chunk })
           end
         end
-        # If no result event found but status is completed, send accumulated content
-        stream_event('content', { text: accumulated_content }) if accumulated_content.present?
-        return
-      elsif status == 'failed'
-        stream_event('error', { text: 'Analysis failed' })
-        return
-      end
-    end
 
-    # Timeout - send accumulated content if any
-    if accumulated_content.present?
-      stream_event('content', { text: accumulated_content })
-    else
-      stream_event('error', { text: 'Analysis timed out' })
+        # Flush to ensure immediate delivery
+        response.stream.flush if response.stream.respond_to?(:flush)
+      end
+
+      # Final result
+      if accumulated_response.present?
+        stream_event('result', {
+                       type: 'success',
+                       text: accumulated_response,
+                       formatted: accumulated_response
+                     })
+      else
+        stream_event('error', { text: 'No response generated' })
+      end
+    rescue StandardError => e
+      Rails.logger.error("[TechnicalAnalysisAgent] Error: #{e.class} - #{e.message}")
+      Rails.logger.error(e.backtrace.join("\n")) if e.backtrace
+      stream_event('error', { text: e.message })
     end
   end
 

@@ -245,14 +245,13 @@ export default class extends Controller {
     // Scroll to bottom
     this.scrollToBottom();
 
-    // Store in history (using trimmed prompt)
-    this.conversationHistory.push({ role: "user", content: prompt });
-
     // Get deep mode state
     const deepMode =
       this.hasDeepModeToggleTarget && this.deepModeToggleTarget.checked;
 
     try {
+      // Send conversation history WITHOUT the current prompt
+      // The backend will add the prompt to the conversation
       const res = await fetch("/chats/stream", {
         method: "POST",
         headers: {
@@ -263,7 +262,7 @@ export default class extends Controller {
           model,
           prompt,
           deep_mode: deepMode,
-          messages: this.conversationHistory, // Send conversation history
+          messages: this.conversationHistory, // Previous messages only (without current prompt)
         }),
       });
 
@@ -333,8 +332,16 @@ export default class extends Controller {
                 // Info messages (progress updates from agents)
                 // Show as a temporary status message
                 this.showInfoMessage(data.text);
+              } else if (data.type === "error") {
+                // Error event from stream
+                const errorText =
+                  data.text || data.message || "An error occurred";
+                this.displayError(errorText);
+                break; // Stop processing stream on error
               } else if (data.error) {
-                throw new Error(data.error);
+                // Error field in response
+                this.displayError(data.error);
+                break; // Stop processing stream on error
               }
             } catch (e) {
               console.error("Parse error:", e);
@@ -344,13 +351,7 @@ export default class extends Controller {
       }
     } catch (e) {
       console.error(e);
-      const errorHtml = `<span class="text-red-400">Error: ${e.message}</span>`;
-      if (this.currentMessageElement) {
-        this.currentMessageElement.querySelector(".message-content").innerHTML =
-          errorHtml;
-      } else {
-        this.addMessage("assistant", errorHtml);
-      }
+      this.displayError(e.message);
     } finally {
       // Determine which textarea and button to use
       const isWelcomeScreen =
@@ -376,7 +377,11 @@ export default class extends Controller {
         // Textarea is already cleared in submit() before sending
       }
 
-      // Store response in history (filter out tool call JSON)
+      // Store user message and assistant response in history after successful response
+      // Add user message to history
+      this.conversationHistory.push({ role: "user", content: prompt });
+
+      // Store assistant response (filter out tool call JSON)
       if (this.accumulatedText) {
         // Remove tool call JSON patterns from content before storing
         let cleanContent = this.accumulatedText
@@ -711,6 +716,34 @@ export default class extends Controller {
         this.scrollToBottom();
       }
     }
+  }
+
+  displayError(errorMessage) {
+    // Display error message with proper formatting
+    const escapedMessage = this.escapeHtml(errorMessage);
+    const errorHtml = `
+      <div class="error-message flex items-start gap-2 p-3 rounded-lg border" style="background-color: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.3);">
+        <svg class="w-5 h-5 flex-shrink-0 mt-0.5" style="color: rgb(239, 68, 68);" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <div class="flex-1">
+          <div class="font-semibold mb-1" style="color: rgb(239, 68, 68);">Error</div>
+          <div class="text-sm leading-relaxed" style="color: var(--text-primary);">${escapedMessage}</div>
+        </div>
+      </div>
+    `;
+
+    if (this.currentMessageElement) {
+      this.currentMessageElement.querySelector(".message-content").innerHTML =
+        errorHtml;
+      // Store raw content for copying
+      this.currentMessageElement.dataset.rawContent = errorMessage;
+    } else {
+      const errorMessageElement = this.addMessage("assistant", errorHtml);
+      errorMessageElement.dataset.rawContent = errorMessage;
+    }
+
+    this.scrollToBottom();
   }
 
   csrf() {

@@ -312,6 +312,22 @@
   opacity: 0.9;
 }
 
+/* Error Message Display */
+.error-message {
+  animation: fadeIn 0.3s ease-in;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* Tool Call Display Component */
 .tool-call-display {
   border: 1px solid var(--border-color);
