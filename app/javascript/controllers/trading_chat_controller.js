@@ -593,19 +593,84 @@ export default class extends Controller {
     }
   }
 
+  cleanModelArtifacts(text) {
+    if (!text) return "";
+
+    let cleaned = text;
+
+    // Remove model-specific tokens
+    cleaned = cleaned.replace(/<\|end_of_text\|>/g, "");
+    cleaned = cleaned.replace(/<file_sep>/g, "\n\n");
+    cleaned = cleaned.replace(/<\|endoftext\|>/gi, "");
+    cleaned = cleaned.replace(/<\|end\|>/gi, "");
+
+    // Remove repeated question-answer patterns
+    // Pattern: "Question?<|end_of_text|>Question?Answer" -> "Question?Answer"
+    const questionPattern = /([^?]+?\?)\s*<\|end_of_text\|>\s*\1\s*/gi;
+    cleaned = cleaned.replace(questionPattern, "$1\n\n");
+
+    // Remove duplicate consecutive sentences (more than 2 in a row)
+    // But preserve line breaks for markdown formatting
+    const lines = cleaned.split("\n");
+    const uniqueLines = [];
+    let lastLine = "";
+    let repeatCount = 0;
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+
+      // Preserve empty lines (important for markdown)
+      if (!trimmed) {
+        uniqueLines.push("");
+        continue;
+      }
+
+      const normalized = trimmed.toLowerCase();
+
+      // If this line is the same as the last one, count repeats
+      if (normalized === lastLine.toLowerCase() && normalized.length > 20) {
+        repeatCount++;
+        // Only keep if it's the first or second occurrence
+        if (repeatCount <= 1) {
+          uniqueLines.push(line);
+        }
+      } else {
+        // New line, reset counter
+        repeatCount = 0;
+        lastLine = trimmed;
+        uniqueLines.push(line);
+      }
+    }
+
+    cleaned = uniqueLines.join("\n");
+
+    // Clean up excessive blank lines (more than 2 consecutive)
+    cleaned = cleaned.replace(/\n{3,}/g, "\n\n");
+
+    // Clean up excessive spaces within lines (but preserve markdown structure)
+    cleaned = cleaned.replace(/[ \t]+/g, " ");
+
+    cleaned = cleaned.trim();
+
+    return cleaned;
+  }
+
   setAssistantMessage(content, treatAsMarkdown = true) {
     if (!this.currentMessageElement) return;
     const target = this.currentMessageElement.querySelector(".message-content");
     if (!target) return;
 
+    // Clean artifacts before displaying
+    const cleanedContent = this.cleanModelArtifacts(content);
+
     if (treatAsMarkdown) {
-      target.innerHTML = this.renderMarkdown(content);
+      target.innerHTML = this.renderMarkdown(cleanedContent);
     } else {
-      target.innerHTML = content;
+      target.innerHTML = cleanedContent;
     }
 
-    // Update raw content for copying
-    this.currentMessageElement.dataset.rawContent = content;
+    // Update raw content for copying (store cleaned version)
+    this.currentMessageElement.dataset.rawContent = cleanedContent;
 
     // Only auto-scroll if user is near bottom
     this.scrollToBottom();
@@ -1066,7 +1131,9 @@ export default class extends Controller {
         if (data.content) {
           if (!this.accumulatedContent) this.accumulatedContent = "";
           this.accumulatedContent += data.content;
-          this.setAssistantMessage(this.accumulatedContent);
+          // Clean artifacts before displaying
+          const cleanedContent = this.cleanModelArtifacts(this.accumulatedContent);
+          this.setAssistantMessage(cleanedContent);
         } else if (data.message) {
           this.appendProgressLog(data.message, "muted");
         }
@@ -1113,10 +1180,13 @@ export default class extends Controller {
         return "done";
       case "result":
         // Reset accumulated content and show final result
+        const resultContent = data.formatted || data.message || "";
+        // Clean artifacts from final result
+        const cleanedResult = this.cleanModelArtifacts(resultContent);
         if (this.accumulatedContent) {
           this.accumulatedContent = "";
         }
-        this.setAssistantMessage(data.formatted || data.message || "");
+        this.setAssistantMessage(cleanedResult);
         this.appendProgressLog("Final response ready.", "success");
         return "done";
       default:
@@ -1596,30 +1666,24 @@ ACCESS_TOKEN=your_access_token</pre><p class="text-xs text-gray-500 mt-2">Get AP
       (role === "user" ? "justify-end" : "justify-start");
 
     const isAI = role === "assistant";
-    const avatarStyle = isAI
-      ? 'style="background: rgba(var(--accent-primary-rgb), 0.2); backdrop-filter: blur(8px);"'
-      : 'style="background: linear-gradient(to right, var(--accent-primary), var(--accent-secondary));"';
-    const messageStyle = isAI
-      ? `style="background: rgba(var(--bg-secondary-rgb), 0.6); backdrop-filter: blur(8px); color: var(--text-primary); border: 1px solid var(--border-color);"`
-      : `style="background: linear-gradient(to right, var(--accent-primary), var(--accent-secondary)); color: white;"`;
 
     messageDiv.innerHTML = `
       <div class="flex gap-3 max-w-[90%] sm:max-w-[80%] lg:max-w-[75%] ${
         role === "user" ? "flex-row-reverse ml-auto" : ""
       }">
-        <div class="avatar flex-shrink-0 ${isAI ? 'style="background: rgba(var(--accent-primary-rgb), 0.15); backdrop-filter: blur(8px);"' : 'style="background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));"'}">
-          <span class="text-base">${isAI ? "🤖" : "👤"}</span>
+        <div class="avatar flex-shrink-0 ${isAI ? 'style="background: rgba(var(--accent-primary-rgb), 0.15); backdrop-filter: blur(8px);"' : 'style="background: var(--accent-primary);"'}">
+          <span class="text-sm">${isAI ? "🤖" : "👤"}</span>
         </div>
-        <div class="flex-1 relative group">
+        <div class="${isAI ? "flex-1" : ""} relative group">
           <div class="message-bubble ${
             isAI ? "message-bubble-assistant prose prose-sm max-w-none" : "message-bubble-user"
           }">
             <div class="message-content ${
               isAI
                 ? "text-body"
-                : "whitespace-pre-wrap text-body"
+                : "text-body"
             }" style="${
-      isAI ? "color: var(--text-primary) !important;" : "color: white;"
+      isAI ? "color: var(--text-primary) !important;" : "color: white; font-weight: 400;"
     }">
               ${content}
             </div>

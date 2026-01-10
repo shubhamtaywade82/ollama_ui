@@ -316,9 +316,12 @@ export default class extends Controller {
                 if (!this.accumulatedText) this.accumulatedText = "";
                 this.accumulatedText += data.text;
 
+                // Clean artifacts from accumulated text
+                const cleanedAccumulated = this.cleanModelArtifacts(this.accumulatedText);
+
                 // Format and update the current AI message
                 const formattedContent = this.formatMessageContent(
-                  this.accumulatedText
+                  cleanedAccumulated
                 );
                 if (this.currentMessageElement) {
                   this.currentMessageElement.querySelector(
@@ -332,8 +335,8 @@ export default class extends Controller {
                 }
               } else if (data.type === "result" && data.text) {
                 // Result event - use the complete result text (it should contain all content)
-                // Update accumulated text to match result (result is authoritative)
-                this.accumulatedText = data.text;
+                // Clean artifacts first
+                this.accumulatedText = this.cleanModelArtifacts(data.text);
 
                 // Format and render the final result (with tool call formatting)
                 const formattedText = this.formatMessageContent(
@@ -404,8 +407,8 @@ export default class extends Controller {
 
       // Store assistant response
       if (this.accumulatedText) {
-        // Remove any tool call JSON patterns from content before storing
-        let cleanContent = this.accumulatedText.trim();
+        // Clean artifacts and remove tool call JSON patterns from content before storing
+        let cleanContent = this.cleanModelArtifacts(this.accumulatedText).trim();
 
         // Only store if there's actual content (not just tool call JSON)
         if (cleanContent) {
@@ -418,12 +421,77 @@ export default class extends Controller {
     }
   }
 
+  cleanModelArtifacts(text) {
+    if (!text) return "";
+
+    let cleaned = text;
+
+    // Remove model-specific tokens
+    cleaned = cleaned.replace(/<\|end_of_text\|>/g, "");
+    cleaned = cleaned.replace(/<file_sep>/g, "\n\n");
+    cleaned = cleaned.replace(/<\|endoftext\|>/gi, "");
+    cleaned = cleaned.replace(/<\|end\|>/gi, "");
+
+    // Remove repeated question-answer patterns
+    // Pattern: "Question?<|end_of_text|>Question?Answer" -> "Question?Answer"
+    const questionPattern = /([^?]+?\?)\s*<\|end_of_text\|>\s*\1\s*/gi;
+    cleaned = cleaned.replace(questionPattern, "$1\n\n");
+
+    // Remove duplicate consecutive sentences (more than 2 in a row)
+    // But preserve line breaks for markdown formatting
+    const lines = cleaned.split("\n");
+    const uniqueLines = [];
+    let lastLine = "";
+    let repeatCount = 0;
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+
+      // Preserve empty lines (important for markdown)
+      if (!trimmed) {
+        uniqueLines.push("");
+        continue;
+      }
+
+      const normalized = trimmed.toLowerCase();
+
+      // If this line is the same as the last one, count repeats
+      if (normalized === lastLine.toLowerCase() && normalized.length > 20) {
+        repeatCount++;
+        // Only keep if it's the first or second occurrence
+        if (repeatCount <= 1) {
+          uniqueLines.push(line);
+        }
+      } else {
+        // New line, reset counter
+        repeatCount = 0;
+        lastLine = trimmed;
+        uniqueLines.push(line);
+      }
+    }
+
+    cleaned = uniqueLines.join("\n");
+
+    // Clean up excessive blank lines (more than 2 consecutive)
+    cleaned = cleaned.replace(/\n{3,}/g, "\n\n");
+
+    // Clean up excessive spaces within lines (but preserve markdown structure)
+    cleaned = cleaned.replace(/[ \t]+/g, " ");
+
+    cleaned = cleaned.trim();
+
+    return cleaned;
+  }
+
   formatMessageContent(text) {
     if (!text) return "";
 
+    // Clean model artifacts first
+    let cleanedText = this.cleanModelArtifacts(text);
+
     // Extract and format tool calls - handle nested JSON objects properly
     // Pattern: {"name": "tool_name", "arguments": {...}}
-    let formattedText = text;
+    let formattedText = cleanedText;
     const matches = [];
 
     // Find tool call patterns by looking for the structure and parsing the full JSON
@@ -579,12 +647,6 @@ export default class extends Controller {
       (role === "user" ? "justify-end" : "justify-start");
 
     const isAI = role === "assistant";
-    const avatarBg = isAI
-      ? 'style="background-color: var(--accent-primary); border: 2px solid var(--accent-primary);"'
-      : 'style="background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary)); border: 2px solid transparent;"';
-    const messageBg = isAI
-      ? `style="background-color: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary);"`
-      : `style="background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary)); color: white; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);"`;
 
     const messageId = `message-${Date.now()}-${Math.random()
       .toString(36)
@@ -594,19 +656,19 @@ export default class extends Controller {
       <div class="flex gap-3 max-w-[90%] sm:max-w-[80%] lg:max-w-[75%] ${
         role === "user" ? "flex-row-reverse ml-auto" : ""
       }">
-        <div class="avatar flex-shrink-0 ${isAI ? 'style="background: rgba(var(--accent-primary-rgb), 0.15); backdrop-filter: blur(8px);"' : 'style="background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));"'}">
-          <span class="text-base">${isAI ? "🤖" : "👤"}</span>
+        <div class="avatar flex-shrink-0 ${isAI ? 'style="background: rgba(var(--accent-primary-rgb), 0.15); backdrop-filter: blur(8px);"' : 'style="background: var(--accent-primary);"'}">
+          <span class="text-sm">${isAI ? "🤖" : "👤"}</span>
         </div>
-        <div class="flex-1 relative group">
+        <div class="${isAI ? "flex-1" : ""} relative group">
           <div class="message-bubble ${
             isAI ? "message-bubble-assistant prose prose-sm max-w-none" : "message-bubble-user"
           }">
             <div class="message-content ${
               isAI
                 ? "text-body"
-                : "whitespace-pre-wrap text-body"
+                : "text-body"
             }" style="${
-      isAI ? "color: var(--text-primary) !important;" : "color: white;"
+      isAI ? "color: var(--text-primary) !important;" : "color: white; font-weight: 400;"
     }">
               ${
                 isAI

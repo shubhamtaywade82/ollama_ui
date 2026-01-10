@@ -612,6 +612,7 @@
   color: white;
   margin-left: auto;
   border-bottom-right-radius: 0.25rem;
+  box-shadow: 0 2px 4px 0 rgba(0, 0, 0, 0.1);
 }
 
 .message-bubble-assistant {
