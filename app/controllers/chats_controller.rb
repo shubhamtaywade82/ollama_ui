@@ -56,7 +56,7 @@ class ChatsController < ApplicationController
     Rails.logger.error "Chat stream error: #{e.class} - #{e.message}"
     Rails.logger.error e.backtrace.join("\n") if e.backtrace
     response.stream.write("data: #{{ type: 'error', text: e.message }.to_json}\n\n")
-    response.stream.flush
+    response.stream.flush if response.stream.respond_to?(:flush)
   ensure
     response.stream.close
   end
@@ -83,23 +83,33 @@ class ChatsController < ApplicationController
 
     client = OllamaClient.new
     accumulated_content = ''
+    chunk_count = 0
 
-    # Stream chat response
-    client.chat_stream(model: model, messages: conversation_messages) do |chunk|
-      case chunk[:type]
-      when 'content'
-        if chunk[:text]
-          accumulated_content += chunk[:text]
-          stream_event('content', { text: chunk[:text] })
+    begin
+      # Stream chat response
+      client.chat_stream(model: model, messages: conversation_messages) do |chunk|
+        case chunk[:type]
+        when 'content'
+          if chunk[:text]
+            chunk_count += 1
+            accumulated_content += chunk[:text]
+            stream_event('content', { text: chunk[:text] })
+          end
         end
       end
-    end
 
-    # Send final result
-    if accumulated_content.present?
-      stream_event('result', { text: accumulated_content })
-    else
-      Rails.logger.warn('DEBUG: No content accumulated after stream completion')
+      Rails.logger.debug { "DEBUG: Stream completed with #{chunk_count} content chunks, total length: #{accumulated_content.length}" }
+
+      # Send final result
+      if accumulated_content.present?
+        stream_event('result', { text: accumulated_content })
+      else
+        Rails.logger.warn('DEBUG: No content accumulated after stream completion')
+      end
+    rescue StandardError => e
+      Rails.logger.error("[stream_direct_llm] Error: #{e.class} - #{e.message}")
+      Rails.logger.error(e.backtrace.join("\n")) if e.backtrace
+      stream_event('error', { text: e.message })
     end
   end
 
@@ -165,6 +175,7 @@ class ChatsController < ApplicationController
 
   def stream_event(type, data)
     response.stream.write("data: #{{ type: type, **data }.to_json}\n\n")
+    response.stream.flush if response.stream.respond_to?(:flush)
   end
 
   def chat_examples

@@ -306,14 +306,9 @@ export default class extends Controller {
                   this.scrollToBottom();
                 }
               } else if (data.type === "result" && data.text) {
-                // Result event - ensure all content is displayed
-                if (!this.accumulatedText) this.accumulatedText = "";
-                // Only append if result text is different from accumulated
-                if (!this.accumulatedText.includes(data.text)) {
-                  this.accumulatedText += data.text;
-                } else {
-                  this.accumulatedText = data.text;
-                }
+                // Result event - use the complete result text (it should contain all content)
+                // Update accumulated text to match result (result is authoritative)
+                this.accumulatedText = data.text;
 
                 // Format and render the final result (with tool call formatting)
                 const formattedText = this.formatMessageContent(

@@ -56,7 +56,8 @@ class OllamaClient
     raise "Failed to chat with Ollama: #{e.message}"
   end
 
-  def chat_stream(model:, prompt: nil, messages: nil, tools: nil, &block)
+  def chat_stream(model:, prompt: nil, messages: nil, tools: nil, &_block)
+    # Block is used via yield calls throughout this method
     # Use /api/chat endpoint for proper chat API with history and tools support
     require 'net/http'
     require 'uri'
@@ -75,7 +76,12 @@ class OllamaClient
     body = {
       model: model,
       messages: payload_messages,
-      stream: true
+      stream: true,
+      options: {
+        # Override Modelfile stop parameters to allow full streaming
+        # Pass empty array to disable stop sequences for complete responses
+        stop: []
+      }
     }
 
     # Add tools if provided
@@ -85,6 +91,7 @@ class OllamaClient
 
     http = Net::HTTP.new(uri.host, uri.port)
     http.read_timeout = 3000
+    http.open_timeout = 10
     http.use_ssl = false
 
     request = Net::HTTP::Post.new(uri.path)
@@ -92,15 +99,27 @@ class OllamaClient
     request.body = body.to_json
 
     accumulated_tool_calls = []
+    chunk_count = 0
 
     http.request(request) do |response|
+      unless response.is_a?(Net::HTTPSuccess)
+        raise "Ollama API error: #{response.code} - #{response.message}"
+      end
+
+      buffer = ''
       response.read_body do |chunk|
-        chunk.lines.each do |line|
-          line = line.strip
+        buffer += chunk
+
+        # Process complete lines from buffer
+        while (line_end = buffer.index("\n"))
+          line = buffer[0..line_end].strip
+          buffer = buffer[(line_end + 1)..-1]
+
           next if line.empty?
 
           begin
             data = JSON.parse(line)
+            chunk_count += 1
 
             # Handle chat API response format
             if data['message']
@@ -112,16 +131,15 @@ class OllamaClient
                 Rails.logger.debug { "DEBUG: Accumulated tool calls: #{accumulated_tool_calls.length} total" }
               end
 
-              # Log important info only when done
-              if (data['done'] == true) && message['tool_calls'].is_a?(Array) && message['tool_calls'].any?
-                Rails.logger.debug { "DEBUG: Final tool_calls: #{message['tool_calls'].length} calls" }
+              # Stream content - Ollama sends incremental deltas
+              if message['content'].present?
+                yield({ type: 'content', text: message['content'] })
               end
-
-              # Stream content (no per-chunk logging)
-              yield({ type: 'content', text: message['content'] }) if message['content'].present?
 
               # Handle structured tool calls (yield when done with all accumulated tool calls)
               if data['done'] == true
+                Rails.logger.debug { "DEBUG: Stream completed with #{chunk_count} chunks" }
+
                 # Use accumulated tool calls if available, otherwise check final message
                 final_tool_calls = if accumulated_tool_calls.any?
                                      accumulated_tool_calls
@@ -133,6 +151,8 @@ class OllamaClient
                   Rails.logger.debug { "DEBUG: Yielding #{final_tool_calls.length} tool_calls" }
                   yield({ type: 'tool_calls', tool_calls: final_tool_calls })
                 end
+
+                break
               end
 
               # Check for tool call in content when done (fallback for models that output JSON)
@@ -157,10 +177,23 @@ class OllamaClient
                 end
               end
             end
-
-            break if data['done'] == true
           rescue JSON::ParserError => e
-            Rails.logger.debug { "DEBUG: Parse error: #{e.message}" }
+            Rails.logger.debug { "DEBUG: Parse error: #{e.message} - Line: #{line[0..100]}" }
+          end
+        end
+      end
+
+      # Process any remaining buffer content
+      unless buffer.empty?
+        buffer.strip.split("\n").each do |line|
+          next if line.empty?
+          begin
+            data = JSON.parse(line)
+            if data['message'] && data['message']['content'].present?
+              yield({ type: 'content', text: data['message']['content'] })
+            end
+          rescue JSON::ParserError => e
+            Rails.logger.debug { "DEBUG: Final buffer parse error: #{e.message}" }
           end
         end
       end
