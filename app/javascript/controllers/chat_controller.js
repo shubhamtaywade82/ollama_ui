@@ -27,10 +27,34 @@ export default class extends Controller {
   connect() {
     this.conversationHistory = [];
     this.hasMessages = false;
+    this.isUserScrolling = false;
+    this.isNearBottom = true;
     this.loadModels();
     this.setupTextareaEnterHandler();
     this.setupTextareaAutoResize();
     this.setupCenteredTextareaAutoResize();
+    this.setupScrollDetection();
+  }
+
+  setupScrollDetection() {
+    if (!this.hasMessagesContainerTarget) return;
+
+    const container = this.messagesContainerTarget;
+    let scrollTimeout;
+
+    container.addEventListener("scroll", () => {
+      // Clear any existing timeout
+      clearTimeout(scrollTimeout);
+
+      // Check if user is near bottom (within 100px)
+      const scrollBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+      this.isNearBottom = scrollBottom < 100;
+
+      // Set a timeout to reset isUserScrolling flag after scrolling stops
+      scrollTimeout = setTimeout(() => {
+        this.isUserScrolling = false;
+      }, 150);
+    });
   }
 
   setupTextareaEnterHandler() {
@@ -242,8 +266,8 @@ export default class extends Controller {
     const aiMessage = this.addMessage("assistant", "");
     this.currentMessageElement = aiMessage;
 
-    // Scroll to bottom
-    this.scrollToBottom();
+    // Scroll to bottom (force scroll for new messages)
+    this.scrollToBottom(true);
 
     // Get deep mode state
     const deepMode =
@@ -303,6 +327,7 @@ export default class extends Controller {
                   // Update raw content for copying
                   this.currentMessageElement.dataset.rawContent =
                     this.accumulatedText;
+                  // Only auto-scroll if user is near bottom
                   this.scrollToBottom();
                 }
               } else if (data.type === "result" && data.text) {
@@ -321,6 +346,7 @@ export default class extends Controller {
                   // Update raw content for copying
                   this.currentMessageElement.dataset.rawContent =
                     this.accumulatedText;
+                  // Only auto-scroll if user is near bottom
                   this.scrollToBottom();
                 }
               } else if (data.type === "info" && data.text) {
@@ -549,7 +575,7 @@ export default class extends Controller {
 
     const messageDiv = document.createElement("div");
     messageDiv.className =
-      "mb-5 flex animate-fade-in " +
+      "mb-4 flex animate-fade-in " +
       (role === "user" ? "justify-end" : "justify-start");
 
     const isAI = role === "assistant";
@@ -565,20 +591,20 @@ export default class extends Controller {
       .substr(2, 9)}`;
 
     messageDiv.innerHTML = `
-      <div class="flex gap-3 max-w-[90%] sm:max-w-[85%] ${
-        role === "user" ? "flex-row-reverse" : ""
+      <div class="flex gap-3 max-w-[90%] sm:max-w-[80%] lg:max-w-[75%] ${
+        role === "user" ? "flex-row-reverse ml-auto" : ""
       }">
-        <div class="flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center text-sm transition-transform hover:scale-110" ${avatarBg}>
-          ${isAI ? "🤖" : "👤"}
+        <div class="avatar flex-shrink-0 ${isAI ? 'style="background: rgba(var(--accent-primary-rgb), 0.15); backdrop-filter: blur(8px);"' : 'style="background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));"'}">
+          <span class="text-base">${isAI ? "🤖" : "👤"}</span>
         </div>
         <div class="flex-1 relative group">
-          <div class="rounded-2xl px-4 py-3 shadow-md hover:shadow-lg transition-all duration-200 ${
-            isAI ? "prose prose-sm max-w-none" : ""
-          }" ${messageBg}>
+          <div class="message-bubble ${
+            isAI ? "message-bubble-assistant prose prose-sm max-w-none" : "message-bubble-user"
+          }">
             <div class="message-content ${
               isAI
-                ? "text-sm leading-relaxed"
-                : "whitespace-pre-wrap text-sm leading-relaxed"
+                ? "text-body"
+                : "whitespace-pre-wrap text-body"
             }" style="${
       isAI ? "color: var(--text-primary) !important;" : "color: white;"
     }">
@@ -592,14 +618,14 @@ export default class extends Controller {
           <!-- Copy Button -->
           <button
             type="button"
-            class="copy-button absolute top-2 ${
-              role === "user" ? "left-2" : "right-2"
-            } opacity-0 group-hover:opacity-100 transition-opacity duration-200 p-1.5 rounded-md hover:scale-110 active:scale-95"
-            style="background-color: var(--bg-tertiary); border: 1px solid var(--border-color);"
+            class="copy-button absolute top-2.5 ${
+              role === "user" ? "left-2.5" : "right-2.5"
+            } opacity-0 group-hover:opacity-100 transition-all duration-200 p-2 rounded-lg hover:scale-110 active:scale-95 focus-visible-ring"
+            style="background-color: rgba(var(--bg-secondary-rgb), 0.9); backdrop-filter: blur(8px); border: 1px solid var(--border-color); box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);"
             data-message-id="${messageId}"
             title="Copy to clipboard"
             aria-label="Copy message">
-            <svg class="w-3.5 h-3.5" style="color: var(--text-primary);" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg class="w-4 h-4" style="color: var(--text-primary);" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
             </svg>
           </button>
@@ -679,11 +705,20 @@ export default class extends Controller {
     }
   }
 
-  scrollToBottom() {
-    setTimeout(() => {
-      this.messagesContainerTarget.scrollTop =
-        this.messagesContainerTarget.scrollHeight;
-    }, 1000);
+  scrollToBottom(force = false) {
+    if (!this.hasMessagesContainerTarget) return;
+
+    // Only auto-scroll if user is near bottom or if forced (e.g., new message sent)
+    if (!force && !this.isNearBottom) {
+      return;
+    }
+
+    // Use requestAnimationFrame for smoother scrolling
+    requestAnimationFrame(() => {
+      const container = this.messagesContainerTarget;
+      container.scrollTop = container.scrollHeight;
+      this.isNearBottom = true;
+    });
   }
 
   showInfoMessage(text) {
@@ -697,6 +732,7 @@ export default class extends Controller {
       if (contentDiv && !contentDiv.querySelector(".info-message")) {
         infoDiv.classList.add("info-message");
         contentDiv.insertBefore(infoDiv, contentDiv.firstChild);
+        // Only auto-scroll if user is near bottom
         this.scrollToBottom();
       }
     }
@@ -727,7 +763,8 @@ export default class extends Controller {
       errorMessageElement.dataset.rawContent = errorMessage;
     }
 
-    this.scrollToBottom();
+    // Force scroll for errors
+    this.scrollToBottom(true);
   }
 
   csrf() {
