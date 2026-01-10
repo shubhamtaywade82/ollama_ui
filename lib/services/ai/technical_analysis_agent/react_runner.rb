@@ -109,15 +109,33 @@ module Services
               context.add_observation(tool_name, tool_input, tool_result)
 
               if tool_result[:error]
-                yield("⚠️  Tool error: #{tool_result[:error]}\n") if block_given?
+                error_message = tool_result[:error].to_s
+                yield("⚠️  Tool error: #{error_message}\n") if block_given?
+
+                # Check for fatal HTTP errors that should stop retrying
+                if fatal_http_error?(error_message)
+                  fatal_code = extract_http_status_code(error_message)
+                  yield("🛑 Fatal error detected (#{fatal_code}). Stopping analysis loop.\n") if block_given?
+                  Rails.logger.warn("[ReActRunner] Fatal HTTP error (#{fatal_code}) detected, stopping loop")
+                  break
+                end
               elsif block_given?
                 yield("✅ Tool completed successfully\n")
               end
             rescue StandardError => e
-              error_result = { error: "#{e.class}: #{e.message}" }
+              error_message = e.message.to_s
+              error_result = { error: "#{e.class}: #{error_message}" }
               context.add_observation(tool_name, tool_input, error_result)
-              yield("❌ Tool exception: #{e.message}\n") if block_given?
-              Rails.logger.error("[ReActRunner] Tool execution error: #{e.class} - #{e.message}")
+              yield("❌ Tool exception: #{error_message}\n") if block_given?
+              Rails.logger.error("[ReActRunner] Tool execution error: #{e.class} - #{error_message}")
+
+              # Check for fatal HTTP errors in exceptions too
+              if fatal_http_error?(error_message)
+                fatal_code = extract_http_status_code(error_message)
+                yield("🛑 Fatal error detected (#{fatal_code}). Stopping analysis loop.\n") if block_given?
+                Rails.logger.warn("[ReActRunner] Fatal HTTP error (#{fatal_code}) in exception, stopping loop")
+                break
+              end
             end
 
             # Check if we have enough data for final analysis
@@ -219,6 +237,26 @@ module Services
         end
 
         private
+
+        # Check if error message contains a fatal HTTP status code
+        # Fatal errors: 401 (Unauthorized), 403 (Forbidden), 404 (Not Found), 429 (Rate Limited)
+        def fatal_http_error?(error_message)
+          return false unless error_message.is_a?(String)
+
+          # Check for HTTP status codes in the error message
+          # Pattern: "401:", "429:", "404:", etc.
+          fatal_codes = [401, 403, 404, 429]
+          fatal_codes.any? { |code| error_message.match?(/\b#{code}\b/) }
+        end
+
+        # Extract HTTP status code from error message
+        def extract_http_status_code(error_message)
+          return nil unless error_message.is_a?(String)
+
+          # Try to extract status code (e.g., "401: Unknown error" -> "401")
+          match = error_message.match(/\b(401|403|404|429)\b/)
+          match ? match[1].to_i : nil
+        end
 
         def plan_next_step(context, stream: false, &block)
           planning_prompt = build_react_planning_prompt(context)

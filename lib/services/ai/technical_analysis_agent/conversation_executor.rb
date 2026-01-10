@@ -34,6 +34,26 @@ module Services
           truncated
         end
 
+        # Check if error message contains a fatal HTTP status code
+        # Fatal errors: 401 (Unauthorized), 403 (Forbidden), 404 (Not Found), 429 (Rate Limited)
+        def fatal_http_error?(error_message)
+          return false unless error_message.is_a?(String)
+
+          # Check for HTTP status codes in the error message
+          # Pattern: "401:", "429:", "404:", etc.
+          fatal_codes = [401, 403, 404, 429]
+          fatal_codes.any? { |code| error_message.match?(/\b#{code}\b/) }
+        end
+
+        # Extract HTTP status code from error message
+        def extract_http_status_code(error_message)
+          return nil unless error_message.is_a?(String)
+
+          # Try to extract status code (e.g., "401: Unknown error" -> "401")
+          match = error_message.match(/\b(401|403|404|429)\b/)
+          match ? match[1].to_i : nil
+        end
+
         # Limit message history to prevent token bloat
         def limit_message_history(messages)
           # Always keep system message (first)
@@ -122,11 +142,20 @@ module Services
 
               # Record errors for learning
               if tool_result.is_a?(Hash) && tool_result[:error]
+                error_message = tool_result[:error].to_s
                 record_error(
                   tool_name: tool_call['tool'],
-                  error_message: tool_result[:error],
+                  error_message: error_message,
                   query_keywords: @current_query_keywords || []
                 )
+
+                # Check for fatal HTTP errors that should stop retrying
+                if fatal_http_error?(error_message)
+                  fatal_code = extract_http_status_code(error_message)
+                  Rails.logger.warn("[TechnicalAnalysisAgent] Fatal HTTP error (#{fatal_code}) detected, stopping conversation")
+                  yield("🛑 [Agent] Fatal error detected (#{fatal_code}). Stopping analysis.\n") if block_given?
+                  break
+                end
               end
 
               # Add assistant message and tool result to conversation
@@ -338,11 +367,20 @@ module Services
 
               # Record errors for learning
               if tool_result.is_a?(Hash) && tool_result[:error]
+                error_message = tool_result[:error].to_s
                 record_error(
                   tool_name: tool_call['tool'],
-                  error_message: tool_result[:error],
+                  error_message: error_message,
                   query_keywords: @current_query_keywords || []
                 )
+
+                # Check for fatal HTTP errors that should stop retrying
+                if fatal_http_error?(error_message)
+                  fatal_code = extract_http_status_code(error_message)
+                  Rails.logger.warn("[TechnicalAnalysisAgent] Fatal HTTP error (#{fatal_code}) detected, stopping conversation")
+                  yield("🛑 [Agent] Fatal error detected (#{fatal_code}). Stopping analysis.\n") if block_given?
+                  break
+                end
               end
 
               # Stream: Tool result

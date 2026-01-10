@@ -474,7 +474,8 @@ export default class extends Controller {
     this.accumulatedText = "";
     this.accumulatedContent = ""; // Reset for technical analysis mode
     this.progressEntries = []; // Reset progress entries
-    const prompt = this.currentPromptTextarea.value.trim(); // Trim spaces from start and end
+    // Normalize prompt: remove all line breaks and collapse whitespace to single line
+    const prompt = this.currentPromptTextarea.value.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim();
 
     // Clear progress sidebar and show placeholder
     if (this.hasProgressLogTarget) {
@@ -1668,8 +1669,10 @@ ACCESS_TOKEN=your_access_token</pre><p class="text-xs text-gray-500 mt-2">Get AP
     const isAI = role === "assistant";
 
     messageDiv.innerHTML = `
-      <div class="flex gap-3 max-w-[90%] sm:max-w-[80%] lg:max-w-[75%] ${
-        role === "user" ? "flex-row-reverse ml-auto" : ""
+      <div class="flex gap-3 ${
+        role === "user"
+          ? "max-w-[95%] sm:max-w-[85%] lg:max-w-[80%] flex-row-reverse ml-auto"
+          : "max-w-[90%] sm:max-w-[80%] lg:max-w-[75%]"
       }">
         <div class="avatar flex-shrink-0 ${isAI ? 'style="background: rgba(var(--accent-primary-rgb), 0.15); backdrop-filter: blur(8px);"' : 'style="background: var(--accent-primary);"'}">
           <span class="text-sm">${isAI ? "🤖" : "👤"}</span>
@@ -1683,9 +1686,15 @@ ACCESS_TOKEN=your_access_token</pre><p class="text-xs text-gray-500 mt-2">Get AP
                 ? "text-body"
                 : "text-body"
             }" style="${
-      isAI ? "color: var(--text-primary) !important;" : "color: white; font-weight: 400;"
+      isAI
+        ? "color: var(--text-primary) !important;"
+        : "color: white; font-weight: 400;"
     }">
-              ${content}
+              ${
+                isAI
+                  ? content
+                  : this.escapeHtml(content).replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim()
+              }
             </div>
           </div>
           <!-- Copy Button -->

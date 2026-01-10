@@ -615,6 +615,11 @@
   box-shadow: 0 2px 4px 0 rgba(0, 0, 0, 0.1);
 }
 
+.message-bubble-user .message-content {
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
 .message-bubble-assistant {
   background-color: var(--bg-secondary);
   color: var(--text-primary);
