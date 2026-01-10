@@ -223,7 +223,7 @@ class OllamaClient
       # Handle tool results (Ollama expects role: 'tool' with tool_name)
       if role.to_s == 'tool'
         normalized[:role] = 'tool'
-        normalized[:tool_name] = msg[:tool_name] || msg['tool_name'] || 'web_search'
+        normalized[:tool_name] = msg[:tool_name] || msg['tool_name']
         # Ensure content is a string
         normalized[:content] = content.to_s
       end

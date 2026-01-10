@@ -381,15 +381,10 @@ export default class extends Controller {
       // Add user message to history
       this.conversationHistory.push({ role: "user", content: prompt });
 
-      // Store assistant response (filter out tool call JSON)
+      // Store assistant response
       if (this.accumulatedText) {
-        // Remove tool call JSON patterns from content before storing
-        let cleanContent = this.accumulatedText
-          .replace(
-            /\{\s*"name"\s*:\s*"web_search"\s*,\s*"arguments"\s*:\s*\{[^}]*\}\s*\}/g,
-            ""
-          )
-          .trim();
+        // Remove any tool call JSON patterns from content before storing
+        let cleanContent = this.accumulatedText.trim();
 
         // Only store if there's actual content (not just tool call JSON)
         if (cleanContent) {
@@ -498,7 +493,6 @@ export default class extends Controller {
 
   createToolCallComponent(toolName, args) {
     const toolIcons = {
-      web_search: "🔍",
       get_quote: "📊",
       get_ohlc: "📈",
       search_instrument: "🔎",
@@ -645,13 +639,8 @@ export default class extends Controller {
         messageElement.querySelector(".message-content")?.innerText ||
         "";
 
-      // Remove tool call components from the text (get clean text)
-      const cleanContent = rawContent
-        .replace(
-          /\{\s*"name"\s*:\s*"(\w+)"\s*,\s*"arguments"\s*:\s*\{[^}]*\}\s*\}/g,
-          ""
-        )
-        .trim();
+      // Remove any tool call components from the text (get clean text)
+      const cleanContent = rawContent.trim();
 
       if (!cleanContent) {
         // If no clean content, try to get the formatted text

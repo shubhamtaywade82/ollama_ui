@@ -26,7 +26,6 @@ A modern Rails application that provides an intelligent chat interface for inter
 - **🤖 AI Chat Interface**: Chat with local AI models via Ollama with streaming responses
 - **📊 Trading Assistant**: Intelligent trading assistant with technical analysis capabilities
 - **💹 Market Data Integration**: Real-time quotes, historical data, and option chains via DhanHQ API
-- **🔍 Web Search Integration**: AI-powered web search for up-to-date information
 - **📈 Technical Analysis Agent**: ReAct-based agent for comprehensive market analysis
 - **🎨 Modern UI**: Responsive design with dark/light themes, glassmorphism effects, and smooth animations
 - **📱 Real-time Updates**: Server-Sent Events (SSE) for live streaming responses
@@ -58,7 +57,6 @@ A modern Rails application that provides an intelligent chat interface for inter
 
 - **DhanHQ API credentials** (for trading features)
 - **Telegram Bot Token** (for notifications)
-- **Google Search API Key** (for enhanced web search, optional)
 
 ---
 
@@ -110,10 +108,6 @@ DHAN_ACCESS_TOKEN=your_access_token
 # Telegram Notifications (Optional)
 TELEGRAM_BOT_TOKEN=your_bot_token
 TELEGRAM_CHAT_ID=your_chat_id
-
-# Web Search (Optional - for enhanced search)
-GOOGLE_SEARCH_API_KEY=your_api_key
-GOOGLE_SEARCH_ENGINE_ID=your_engine_id
 ```
 
 ### 5. Start Ollama
@@ -159,8 +153,6 @@ This command runs:
 | `DHAN_ACCESS_TOKEN`              | DhanHQ access token        | -                        | For trading       |
 | `TELEGRAM_BOT_TOKEN`             | Telegram bot token         | -                        | For notifications |
 | `TELEGRAM_CHAT_ID`               | Telegram chat ID           | -                        | For notifications |
-| `GOOGLE_SEARCH_API_KEY`          | Google Search API key      | -                        | For web search    |
-| `GOOGLE_SEARCH_ENGINE_ID`        | Google Search Engine ID    | -                        | For web search    |
 | `AI_AGENT_MAX_ITERATIONS`        | Max agent iterations       | `15`                     | No                |
 | `AI_AGENT_MAX_CONSECUTIVE_TOOLS` | Max consecutive tool calls | `8`                      | No                |
 | `AI_AGENT_STREAM_TIMEOUT`        | Stream timeout (seconds)   | `60`                     | No                |
@@ -191,16 +183,15 @@ telegram:
 The general chat interface allows you to:
 
 - **Select AI Models**: Choose from available Ollama models
-- **Ask Questions**: Get answers with web search integration
+- **Ask Questions**: Get answers from AI models
 - **Multi-turn Conversations**: Maintain conversation history
-- **Tool Calling**: Automatic tool execution (web search, etc.)
 
 #### Example Prompts
 
 ```
 What are the latest trends in AI?
 Explain how RSI indicator works
-What is the current weather in Mumbai?
+Help me understand technical analysis
 ```
 
 ### Trading Assistant (`/trading`)
@@ -264,7 +255,6 @@ ollama_ui/
 │   │       └── trading_chat_controller.js
 │   ├── models/               # ActiveRecord models
 │   ├── services/             # Service objects
-│   │   ├── web_search_service.rb
 │   │   ├── agent_router.rb
 │   │   └── dhan_trading_agent.rb
 │   └── views/                # ERB templates
@@ -294,12 +284,11 @@ ollama_ui/
 
 #### 2. Controllers
 
-- **`ChatsController`**: General chat interface with web search
+- **`ChatsController`**: General chat interface
 - **`TradingController`**: Trading assistant with market data integration
 
 #### 3. Services
 
-- **`WebSearchService`**: Web search with DuckDuckGo and Google fallback
 - **`AgentRouter`**: Routes queries to appropriate agent or direct LLM
 - **`DhanTradingAgent`**: Trading-specific agent with DhanHQ integration
 
@@ -322,7 +311,7 @@ OllamaClient (streams to Ollama)
     ↓
 Tool Calls (if needed)
     ↓
-Tool Execution (market data, web search, etc.)
+Tool Execution (market data, etc.)
     ↓
 Response Streaming (SSE)
     ↓
