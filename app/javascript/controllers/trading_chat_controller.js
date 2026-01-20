@@ -7,6 +7,10 @@ marked.setOptions({
   gfm: true,
   headerIds: false,
   mangle: false,
+  pedantic: false,
+  sanitize: false,
+  smartLists: true,
+  smartypants: false,
 });
 
 export default class extends Controller {
@@ -1691,37 +1695,62 @@ ACCESS_TOKEN=your_access_token</pre><p class="text-xs text-gray-500 mt-2">Get AP
   formatJsonInContent(content) {
     if (!content) return content;
 
-    // Skip if content already contains code blocks
-    if (content.includes('```')) {
-      return content;
+    let formatted = content;
+
+    // First, handle JSON objects that are already in code blocks but not formatted
+    formatted = formatted.replace(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/g, (match, jsonStr) => {
+      try {
+        const parsed = JSON.parse(jsonStr);
+        const formattedJson = JSON.stringify(parsed, null, 2);
+        return '```json\n' + formattedJson + '\n```';
+      } catch (e) {
+        return match; // Return original if parsing fails
+      }
+    });
+
+    // Skip if content already contains properly formatted code blocks
+    if (formatted.includes('```json') || formatted.includes('```\n{')) {
+      return formatted;
     }
 
-    // Pattern to match JSON objects that span multiple lines
-    // Look for { ... } patterns that contain JSON-like structure (quotes and colons)
-    const jsonBlockPattern = /\{[\s\S]*?"[\w_]+"\s*:[\s\S]*?\}/g;
+    // Pattern to match JSON objects that span multiple lines (not in code blocks)
+    // Look for { ... } patterns that contain JSON-like structure
+    const jsonBlockPattern = /(?:^|\n)\s*(\{[\s\S]*?"[\w_]+"\s*:[\s\S]*?\})\s*(?:\n|$)/g;
 
-    let formatted = content;
-    const matches = [...formatted.matchAll(jsonBlockPattern)];
+    const matches = [];
+    let match;
+    while ((match = jsonBlockPattern.exec(formatted)) !== null) {
+      const jsonText = match[1];
 
-    // Process matches in reverse to preserve indices
-    for (let i = matches.length - 1; i >= 0; i--) {
-      const match = matches[i];
-      const jsonText = match[0];
+      // Skip if it's already in a code block
+      if (match.index > 0) {
+        const before = formatted.substring(Math.max(0, match.index - 10), match.index);
+        if (before.includes('```')) continue;
+      }
 
       // Check if it looks like JSON (has quotes and colons)
       if (jsonText.includes('"') && jsonText.includes(':')) {
         try {
           // Try to parse and validate it's JSON
           const jsonObj = JSON.parse(jsonText);
-          // Format it nicely and wrap in code block
-          const formattedJson = JSON.stringify(jsonObj, null, 2);
-          formatted = formatted.substring(0, match.index) +
-                     '```json\n' + formattedJson + '\n```' +
-                     formatted.substring(match.index + match[0].length);
+          matches.push({
+            index: match.index,
+            length: match[0].length,
+            jsonText: jsonText,
+            formatted: '```json\n' + JSON.stringify(jsonObj, null, 2) + '\n```'
+          });
         } catch (e) {
-          // Not valid JSON, leave as is
+          // Not valid JSON, skip
         }
       }
+    }
+
+    // Process matches in reverse to preserve indices
+    for (let i = matches.length - 1; i >= 0; i--) {
+      const m = matches[i];
+      formatted = formatted.substring(0, m.index) +
+                 m.formatted +
+                 formatted.substring(m.index + m.length);
     }
 
     return formatted;
