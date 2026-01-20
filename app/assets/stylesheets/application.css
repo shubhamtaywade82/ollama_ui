@@ -200,6 +200,28 @@
   font-size: 0.9375rem;
 }
 
+.message-bubble-assistant .message-content {
+  color: var(--text-primary) !important;
+  background-color: transparent !important;
+}
+
+.message-bubble-assistant .message-content * {
+  color: var(--text-primary) !important;
+}
+
+.message-bubble-assistant .message-content p {
+  color: var(--text-primary) !important;
+}
+
+.message-bubble-assistant .message-content h1,
+.message-bubble-assistant .message-content h2,
+.message-bubble-assistant .message-content h3,
+.message-bubble-assistant .message-content h4,
+.message-bubble-assistant .message-content h5,
+.message-bubble-assistant .message-content h6 {
+  color: var(--text-primary) !important;
+}
+
 .message-content p {
   margin-bottom: 1rem;
   line-height: 1.7;
@@ -245,6 +267,12 @@
   max-width: 100%;
 }
 
+/* Force all prose text to use theme colors */
+.prose,
+.prose * {
+  color: var(--text-primary) !important;
+}
+
 .prose p,
 .prose h1,
 .prose h2,
@@ -254,12 +282,14 @@
 .prose h6,
 .prose strong,
 .prose em,
-.prose code,
-.prose pre,
 .prose blockquote,
 .prose ul,
 .prose ol,
-.prose li {
+.prose li,
+.prose td,
+.prose th,
+.prose div,
+.prose span {
   color: var(--text-primary) !important;
 }
 
@@ -274,7 +304,7 @@
   opacity: 0.8;
 }
 
-.prose code {
+.prose code:not(pre code) {
   background-color: var(--bg-tertiary) !important;
   color: var(--accent-primary) !important;
   padding: 0.25rem 0.5rem;
@@ -427,12 +457,21 @@
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1) !important;
 }
 
+.message-bubble-assistant .message-content pre {
+  background: var(--bg-tertiary) !important;
+  color: var(--text-primary) !important;
+}
+
 .message-content pre code {
   background: transparent !important;
   padding: 0 !important;
   border: none !important;
   color: var(--text-primary) !important;
   font-size: inherit !important;
+}
+
+.message-bubble-assistant .message-content pre code {
+  color: var(--text-primary) !important;
 }
 
 .message-content code:not(pre code) {
@@ -794,17 +833,27 @@
 }
 
 .message-bubble-assistant {
-  background: white;
-  color: var(--text-primary);
-  border: 1px solid var(--border-color);
+  background-color: var(--bg-secondary) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border-color) !important;
   margin-right: auto;
   border-bottom-left-radius: 0.375rem;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
 }
 
-.dark .message-bubble-assistant {
-  background: #1e293b;
-  border-color: #334155;
+/* Force all text inside assistant bubbles to use theme colors */
+.message-bubble-assistant,
+.message-bubble-assistant * {
+  color: var(--text-primary) !important;
+}
+
+.message-bubble-assistant p,
+.message-bubble-assistant div,
+.message-bubble-assistant span,
+.message-bubble-assistant li,
+.message-bubble-assistant td,
+.message-bubble-assistant th {
+  color: var(--text-primary) !important;
 }
 
 .message-bubble-assistant:hover {
