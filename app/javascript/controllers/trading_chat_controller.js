@@ -1747,13 +1747,13 @@ ACCESS_TOKEN=your_access_token</pre><p class="text-xs text-gray-500 mt-2">Get AP
     const isAI = role === "assistant";
 
     messageDiv.innerHTML = `
-      <div class="flex gap-2 sm:gap-3 ${
+      <div class="flex gap-3 ${
         role === "user"
           ? "max-w-[95%] sm:max-w-[85%] lg:max-w-[80%] flex-row-reverse ml-auto"
           : "max-w-[90%] sm:max-w-[80%] lg:max-w-[75%]"
       }">
-        <div class="avatar flex-shrink-0 ${isAI ? 'style="background: rgba(var(--accent-primary-rgb), 0.15); backdrop-filter: blur(8px);"' : 'style="background: var(--accent-primary);"'}">
-          <span class="text-sm">${isAI ? "🤖" : "👤"}</span>
+        <div class="avatar flex-shrink-0 ${isAI ? 'style="background: linear-gradient(135deg, rgba(var(--accent-primary-rgb), 0.2), rgba(var(--accent-secondary-rgb), 0.2)); backdrop-filter: blur(8px); border: 1px solid rgba(var(--accent-primary-rgb), 0.3);"' : 'style="background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));"'}">
+          <span class="text-base">${isAI ? "🤖" : "👤"}</span>
         </div>
         <div class="${isAI ? "flex-1" : ""} relative group">
           <div class="message-bubble ${
@@ -1761,8 +1761,8 @@ ACCESS_TOKEN=your_access_token</pre><p class="text-xs text-gray-500 mt-2">Get AP
           }">
             <div class="message-content ${
               isAI
-                ? "text-body"
-                : "text-body"
+                ? "text-sm sm:text-base"
+                : "text-sm sm:text-base"
             }" style="${
       isAI
         ? "color: var(--text-primary) !important;"
@@ -1778,13 +1778,13 @@ ACCESS_TOKEN=your_access_token</pre><p class="text-xs text-gray-500 mt-2">Get AP
           <!-- Copy Button -->
           <button
             type="button"
-            class="copy-button absolute top-2.5 ${
-              role === "user" ? "left-2.5" : "right-2.5"
-            } opacity-0 group-hover:opacity-100 transition-all duration-200 p-2 rounded-lg hover:scale-110 active:scale-95 focus-visible-ring cursor-pointer"
-            style="background-color: rgba(var(--bg-secondary-rgb), 0.9); backdrop-filter: blur(8px); border: 1px solid var(--border-color); box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);"
+            class="copy-button absolute top-3 ${
+              role === "user" ? "left-3" : "right-3"
+            } opacity-0 group-hover:opacity-100 transition-all duration-200 p-2 rounded-lg hover:scale-110 active:scale-95 focus-visible-ring cursor-pointer bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-lg"
+            style="backdrop-filter: blur(8px);"
             title="Copy to clipboard"
             aria-label="Copy message">
-            <svg class="w-4 h-4" style="color: var(--text-primary);" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg class="w-4 h-4 text-slate-600 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
             </svg>
           </button>

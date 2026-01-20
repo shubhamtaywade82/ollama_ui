@@ -267,7 +267,7 @@
   }
 }
 
-/* Smooth Animations */
+/* Enhanced Animations */
 @keyframes fade-in {
   from {
     opacity: 0;
@@ -279,8 +279,38 @@
   }
 }
 
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 .animate-fade-in {
-  animation: fade-in 0.3s ease-out;
+  animation: fade-in 0.4s ease-out;
+}
+
+.animate-slide-up {
+  animation: slide-up 0.4s ease-out;
+}
+
+.animate-scale-in {
+  animation: scale-in 0.3s ease-out;
 }
 
 /* Message Bubbles Enhancement - Refined */
@@ -582,67 +612,97 @@
   font-size: 0.875rem;
 }
 
-/* Card Styles - Refined */
+/* Modern Card Styles */
 .card-base {
   background-color: var(--bg-secondary);
   border: 1px solid var(--border-color);
-  border-radius: 0.625rem;
-  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: 0.75rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.card-interactive {
+  cursor: pointer;
 }
 
 .card-interactive:hover {
-  box-shadow: 0 2px 4px 0 rgba(0, 0, 0, 0.08), 0 1px 2px 0 rgba(0, 0, 0, 0.04);
-  border-color: var(--border-color);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  transform: translateY(-2px);
+  border-color: var(--accent-primary);
 }
 
-/* Message Bubble Enhancements - Refined */
+/* Modern Message Bubbles */
 .message-bubble {
-  border-radius: 0.75rem;
-  padding: 0.625rem 0.875rem;
+  border-radius: 1rem;
+  padding: 0.875rem 1.125rem;
   max-width: 80%;
   word-wrap: break-word;
   overflow-wrap: break-word;
   position: relative;
-  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  transition: all 0.2s ease;
+}
+
+.message-bubble:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
 }
 
 .message-bubble-user {
-  background: var(--accent-primary);
+  background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
   color: white;
   margin-left: auto;
-  border-bottom-right-radius: 0.25rem;
-  box-shadow: 0 2px 4px 0 rgba(0, 0, 0, 0.1);
+  border-bottom-right-radius: 0.375rem;
+  box-shadow: 0 4px 12px rgba(var(--accent-primary-rgb), 0.3);
+}
+
+.message-bubble-user:hover {
+  box-shadow: 0 6px 16px rgba(var(--accent-primary-rgb), 0.4);
+  transform: translateY(-1px);
 }
 
 .message-bubble-user .message-content {
   word-wrap: break-word;
   overflow-wrap: break-word;
+  color: white;
+  font-weight: 400;
 }
 
 .message-bubble-assistant {
-  background-color: var(--bg-secondary);
+  background: white;
   color: var(--text-primary);
   border: 1px solid var(--border-color);
   margin-right: auto;
-  border-bottom-left-radius: 0.25rem;
+  border-bottom-left-radius: 0.375rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
 }
 
-/* Avatar Enhancements */
+.dark .message-bubble-assistant {
+  background: #1e293b;
+  border-color: #334155;
+}
+
+.message-bubble-assistant:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  transform: translateY(-1px);
+}
+
+/* Modern Avatar */
 .avatar {
-  width: 2rem;
-  height: 2rem;
+  width: 2.5rem;
+  height: 2.5rem;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  font-size: 0.875rem;
-  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  font-size: 1rem;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 .avatar:hover {
-  transform: scale(1.1);
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
 /* Header Enhancements - Refined */
@@ -669,7 +729,37 @@
   box-shadow: 0 0 0 2px rgba(var(--accent-primary-rgb), 0.1), 0 2px 4px 0 rgba(0, 0, 0, 0.05);
 }
 
-/* Refined Scrollbar */
+/* Modern Scrollbar */
+.scrollbar-modern::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.scrollbar-modern::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 4px;
+}
+
+.scrollbar-modern::-webkit-scrollbar-thumb {
+  background: linear-gradient(135deg, #cbd5e1, #94a3b8);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.scrollbar-modern::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(135deg, #94a3b8, #64748b);
+}
+
+.dark .scrollbar-modern::-webkit-scrollbar-thumb {
+  background: linear-gradient(135deg, #475569, #334155);
+}
+
+.dark .scrollbar-modern::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(135deg, #334155, #1e293b);
+}
+
+/* Refined Scrollbar (Legacy Support) */
 .scrollbar-refined::-webkit-scrollbar {
   width: 8px;
   height: 8px;
