@@ -5,6 +5,8 @@ import { createConsumer } from "@rails/actioncable";
 marked.setOptions({
   breaks: true,
   gfm: true,
+  headerIds: false,
+  mangle: false,
 });
 
 export default class extends Controller {
@@ -1646,7 +1648,48 @@ ACCESS_TOKEN=your_access_token</pre><p class="text-xs text-gray-500 mt-2">Get AP
       return "";
     }
 
-    return marked.parse(content);
+    // Detect and format JSON-like structures in the content
+    const formattedContent = this.formatJsonInContent(content);
+    return marked.parse(formattedContent);
+  }
+
+  formatJsonInContent(content) {
+    if (!content) return content;
+
+    // Skip if content already contains code blocks
+    if (content.includes('```')) {
+      return content;
+    }
+
+    // Pattern to match JSON objects that span multiple lines
+    // Look for { ... } patterns that contain JSON-like structure (quotes and colons)
+    const jsonBlockPattern = /\{[\s\S]*?"[\w_]+"\s*:[\s\S]*?\}/g;
+
+    let formatted = content;
+    const matches = [...formatted.matchAll(jsonBlockPattern)];
+
+    // Process matches in reverse to preserve indices
+    for (let i = matches.length - 1; i >= 0; i--) {
+      const match = matches[i];
+      const jsonText = match[0];
+
+      // Check if it looks like JSON (has quotes and colons)
+      if (jsonText.includes('"') && jsonText.includes(':')) {
+        try {
+          // Try to parse and validate it's JSON
+          const jsonObj = JSON.parse(jsonText);
+          // Format it nicely and wrap in code block
+          const formattedJson = JSON.stringify(jsonObj, null, 2);
+          formatted = formatted.substring(0, match.index) +
+                     '```json\n' + formattedJson + '\n```' +
+                     formatted.substring(match.index + match[0].length);
+        } catch (e) {
+          // Not valid JSON, leave as is
+        }
+      }
+    }
+
+    return formatted;
   }
 
   addMessage(role, content) {
