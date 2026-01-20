@@ -653,7 +653,7 @@ export default class extends Controller {
       .substr(2, 9)}`;
 
     messageDiv.innerHTML = `
-      <div class="flex gap-3 max-w-[90%] sm:max-w-[80%] lg:max-w-[75%] ${
+      <div class="flex gap-2 sm:gap-3 max-w-[90%] sm:max-w-[80%] lg:max-w-[75%] ${
         role === "user" ? "flex-row-reverse ml-auto" : ""
       }">
         <div class="avatar flex-shrink-0 ${isAI ? 'style="background: rgba(var(--accent-primary-rgb), 0.15); backdrop-filter: blur(8px);"' : 'style="background: var(--accent-primary);"'}">

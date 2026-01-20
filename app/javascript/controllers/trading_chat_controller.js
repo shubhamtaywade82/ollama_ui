@@ -96,10 +96,17 @@ export default class extends Controller {
   }
 
   setupResponsiveHandlers() {
-    // Handle window resize to close sidebar on mobile when switching to desktop
+    // Handle window resize to manage sidebar state
     this.resizeHandler = () => {
-      if (window.innerWidth >= 1024 && this.sidebarOpen) {
-        this.closeSidebar();
+      const isMobile = window.innerWidth < 640;
+      const isDesktop = window.innerWidth >= 1024;
+
+      if (isMobile && this.progressSidebarOpen) {
+        // On mobile, ensure sidebar can be toggled properly
+        // Keep current state but ensure proper styling
+      } else if (isDesktop && !this.progressSidebarOpen) {
+        // On desktop, open sidebar if it was closed
+        this.openProgressSidebar();
       }
     };
     window.addEventListener("resize", this.resizeHandler);
@@ -121,6 +128,7 @@ export default class extends Controller {
 
     this.progressSidebarOpen = true;
     const sidebar = this.progressSidebarTarget;
+    const isMobile = window.innerWidth < 640;
 
     // Remove collapse classes
     sidebar.classList.remove(
@@ -129,7 +137,20 @@ export default class extends Controller {
       "overflow-hidden",
       "border-0"
     );
-    sidebar.classList.add("w-72");
+
+    // Add appropriate width based on screen size
+    if (isMobile) {
+      sidebar.classList.add("w-64");
+      // Show overlay on mobile
+      if (this.hasSidebarOverlayTarget) {
+        this.sidebarOverlayTarget.style.display = "block";
+        setTimeout(() => {
+          this.sidebarOverlayTarget.style.opacity = "1";
+        }, 10);
+      }
+    } else {
+      sidebar.classList.add("w-72");
+    }
 
     // Hide floating expand button
     if (this.hasExpandProgressBtnTarget) {
@@ -155,9 +176,18 @@ export default class extends Controller {
 
     this.progressSidebarOpen = false;
     const sidebar = this.progressSidebarTarget;
+    const isMobile = window.innerWidth < 640;
+
+    // Hide overlay on mobile first
+    if (isMobile && this.hasSidebarOverlayTarget) {
+      this.sidebarOverlayTarget.style.opacity = "0";
+      setTimeout(() => {
+        this.sidebarOverlayTarget.style.display = "none";
+      }, 300);
+    }
 
     // Collapse to left (-translate-x-full moves it off-screen to the left)
-    sidebar.classList.remove("w-72");
+    sidebar.classList.remove("w-72", "w-64");
     sidebar.classList.add(
       "-translate-x-full",
       "w-0",
@@ -196,6 +226,11 @@ export default class extends Controller {
   initializeProgressSidebar() {
     if (this.hasProgressLogTarget) {
       this.currentProgressLog = this.progressLogTarget;
+    }
+
+    // On mobile, start with sidebar collapsed
+    if (window.innerWidth < 640) {
+      this.closeProgressSidebar();
     }
   }
 
@@ -1712,7 +1747,7 @@ ACCESS_TOKEN=your_access_token</pre><p class="text-xs text-gray-500 mt-2">Get AP
     const isAI = role === "assistant";
 
     messageDiv.innerHTML = `
-      <div class="flex gap-3 ${
+      <div class="flex gap-2 sm:gap-3 ${
         role === "user"
           ? "max-w-[95%] sm:max-w-[85%] lg:max-w-[80%] flex-row-reverse ml-auto"
           : "max-w-[90%] sm:max-w-[80%] lg:max-w-[75%]"
