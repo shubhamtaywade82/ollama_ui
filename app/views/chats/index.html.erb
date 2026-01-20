@@ -1,22 +1,22 @@
-<div data-controller="chat theme" class="flex flex-col h-screen overflow-hidden bg-gradient-to-br from-slate-50 via-white to-slate-100 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950" style="background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 50%, var(--bg-primary) 100%);">
+<div data-controller="chat theme" class="flex flex-col h-screen overflow-hidden" style="background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 50%, var(--bg-primary) 100%);">
   <!-- Modern Header with Glassmorphism -->
-  <header class="sticky top-0 z-50 backdrop-blur-xl bg-white/70 dark:bg-slate-900/70 border-b border-slate-200/50 dark:border-slate-700/50 shadow-sm">
+  <header class="sticky top-0 z-50 backdrop-blur-xl border-b shadow-sm" style="background-color: rgba(var(--bg-secondary-rgb), 0.85); border-color: var(--border-color);">
     <div class="px-4 sm:px-6 py-3">
       <div class="flex items-center justify-between gap-4">
         <!-- Left: Navigation & Model -->
         <div class="flex items-center gap-3 flex-1 min-w-0">
           <!-- Navigation Pills -->
-          <div class="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800/50 rounded-lg p-1">
-            <a href="/" class="px-3 py-1.5 text-sm font-medium rounded-md bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 shadow-sm transition-all duration-200">
+          <div class="flex items-center gap-1.5 rounded-lg p-1" style="background-color: var(--bg-tertiary);">
+            <a href="/" class="px-3 py-1.5 text-sm font-medium rounded-md shadow-sm transition-all duration-200" style="background-color: var(--bg-secondary); color: var(--text-primary);">
               Chat
             </a>
-            <a href="/trading" class="px-3 py-1.5 text-sm font-medium rounded-md text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 transition-colors">
+            <a href="/trading" class="px-3 py-1.5 text-sm font-medium rounded-md transition-colors" style="color: var(--text-secondary);" onmouseover="this.style.color='var(--text-primary)'" onmouseout="this.style.color='var(--text-secondary)'">
               Trading
             </a>
           </div>
 
           <!-- Model Selector with Icon -->
-          <div class="flex items-center gap-2 bg-white dark:bg-slate-800 rounded-lg px-3 py-1.5 border border-slate-200 dark:border-slate-700 shadow-sm">
+          <div class="flex items-center gap-2 rounded-lg px-3 py-1.5 border shadow-sm" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
             <svg class="w-4 h-4 text-slate-500 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
             </svg>
@@ -35,45 +35,45 @@
         <!-- Right: Model Status & Theme -->
         <div class="flex items-center gap-3">
           <!-- Model Status Badge -->
-          <div class="hidden md:flex items-center gap-2 px-3 py-1.5 bg-slate-100 dark:bg-slate-800 rounded-lg">
+          <div class="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-lg" style="background-color: var(--bg-tertiary);">
             <div class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-            <span class="text-xs font-medium text-slate-600 dark:text-slate-400" data-chat-target="modelName">Select a model</span>
+            <span class="text-xs font-medium" data-chat-target="modelName" style="color: var(--text-secondary);">Select a model</span>
           </div>
 
           <!-- Theme Switcher -->
           <div class="relative" data-controller="theme">
-            <button data-action="click->theme#toggleDropdown" class="p-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors shadow-sm" type="button" aria-label="Theme switcher">
-              <svg class="w-5 h-5 text-slate-600 dark:text-slate-400" fill="currentColor" viewBox="0 0 20 20">
+            <button data-action="click->theme#toggleDropdown" class="p-2 rounded-lg border transition-colors shadow-sm hover:opacity-80" style="background-color: var(--bg-secondary); border-color: var(--border-color);" type="button" aria-label="Theme switcher">
+              <svg class="w-5 h-5" style="color: var(--text-secondary);" fill="currentColor" viewBox="0 0 20 20">
                 <path d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z"/>
               </svg>
             </button>
-            <div data-theme-dropdown class="hidden absolute right-0 mt-2 w-56 rounded-xl shadow-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 py-2 z-50">
-              <div class="px-3 py-2 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">Theme</div>
-              <button data-action="click->theme#switch" data-theme="light" class="w-full px-4 py-2.5 text-left text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors flex items-center gap-3">
+            <div data-theme-dropdown class="hidden absolute right-0 mt-2 w-56 rounded-xl shadow-xl border py-2 z-50" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
+              <div class="px-3 py-2 text-xs font-semibold uppercase tracking-wide" style="color: var(--text-tertiary);">Theme</div>
+              <button data-action="click->theme#switch" data-theme="light" class="w-full px-4 py-2.5 text-left text-sm transition-colors flex items-center gap-3 hover:opacity-80" style="color: var(--text-primary);" onmouseover="this.style.backgroundColor='var(--bg-tertiary)'" onmouseout="this.style.backgroundColor='transparent'">
                 <span class="w-4 h-4 rounded-full border-2 border-slate-300" style="background: linear-gradient(135deg, #f9fafb 50%, #111827 50%);"></span>
                 <span>Light</span>
               </button>
-              <button data-action="click->theme#switch" data-theme="dark" class="w-full px-4 py-2.5 text-left text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors flex items-center gap-3">
+              <button data-action="click->theme#switch" data-theme="dark" class="w-full px-4 py-2.5 text-left text-sm transition-colors flex items-center gap-3 hover:opacity-80" style="color: var(--text-primary);" onmouseover="this.style.backgroundColor='var(--bg-tertiary)'" onmouseout="this.style.backgroundColor='transparent'">
                 <span class="w-4 h-4 rounded-full bg-slate-800 border-2 border-slate-600"></span>
                 <span>Dark</span>
               </button>
-              <button data-action="click->theme#switch" data-theme="blue" class="w-full px-4 py-2.5 text-left text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors flex items-center gap-3">
+              <button data-action="click->theme#switch" data-theme="blue" class="w-full px-4 py-2.5 text-left text-sm transition-colors flex items-center gap-3 hover:opacity-80" style="color: var(--text-primary);" onmouseover="this.style.backgroundColor='var(--bg-tertiary)'" onmouseout="this.style.backgroundColor='transparent'">
                 <span class="w-4 h-4 rounded-full border-2 border-blue-300" style="background: #3b82f6;"></span>
                 <span>Blue</span>
               </button>
-              <button data-action="click->theme#switch" data-theme="green" class="w-full px-4 py-2.5 text-left text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors flex items-center gap-3">
+              <button data-action="click->theme#switch" data-theme="green" class="w-full px-4 py-2.5 text-left text-sm transition-colors flex items-center gap-3 hover:opacity-80" style="color: var(--text-primary);" onmouseover="this.style.backgroundColor='var(--bg-tertiary)'" onmouseout="this.style.backgroundColor='transparent'">
                 <span class="w-4 h-4 rounded-full border-2 border-green-300" style="background: #10b981;"></span>
                 <span>Green</span>
               </button>
-              <button data-action="click->theme#switch" data-theme="purple" class="w-full px-4 py-2.5 text-left text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors flex items-center gap-3">
+              <button data-action="click->theme#switch" data-theme="purple" class="w-full px-4 py-2.5 text-left text-sm transition-colors flex items-center gap-3 hover:opacity-80" style="color: var(--text-primary);" onmouseover="this.style.backgroundColor='var(--bg-tertiary)'" onmouseout="this.style.backgroundColor='transparent'">
                 <span class="w-4 h-4 rounded-full border-2 border-purple-300" style="background: #9333ea;"></span>
                 <span>Purple</span>
               </button>
-              <button data-action="click->theme#switch" data-theme="orange" class="w-full px-4 py-2.5 text-left text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors flex items-center gap-3">
+              <button data-action="click->theme#switch" data-theme="orange" class="w-full px-4 py-2.5 text-left text-sm transition-colors flex items-center gap-3 hover:opacity-80" style="color: var(--text-primary);" onmouseover="this.style.backgroundColor='var(--bg-tertiary)'" onmouseout="this.style.backgroundColor='transparent'">
                 <span class="w-4 h-4 rounded-full border-2 border-orange-300" style="background: #f97316;"></span>
                 <span>Orange</span>
               </button>
-              <button data-action="click->theme#switch" data-theme="red" class="w-full px-4 py-2.5 text-left text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors flex items-center gap-3">
+              <button data-action="click->theme#switch" data-theme="red" class="w-full px-4 py-2.5 text-left text-sm transition-colors flex items-center gap-3 hover:opacity-80" style="color: var(--text-primary);" onmouseover="this.style.backgroundColor='var(--bg-tertiary)'" onmouseout="this.style.backgroundColor='transparent'">
                 <span class="w-4 h-4 rounded-full border-2 border-red-300" style="background: #ef4444;"></span>
                 <span>Red</span>
               </button>
@@ -99,7 +99,7 @@
           <h1 class="text-4xl sm:text-5xl font-bold mb-4 bg-gradient-to-r from-slate-900 to-slate-700 dark:from-slate-100 dark:to-slate-300 bg-clip-text text-transparent">
             How can I help you today?
           </h1>
-          <p class="text-lg text-slate-600 dark:text-slate-400">
+          <p class="text-lg" style="color: var(--text-secondary);">
             Ask me anything - from general questions to trading insights
           </p>
         </div>
@@ -108,12 +108,12 @@
         <div class="max-h-[60vh] overflow-y-auto scrollbar-modern mb-8 px-2">
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <% @examples.each do |category_data| %>
-              <div class="group relative bg-white dark:bg-slate-800 rounded-xl p-5 border border-slate-200 dark:border-slate-700 shadow-sm hover:shadow-lg transition-all duration-300 hover:-translate-y-1">
+              <div class="group relative rounded-xl p-5 border shadow-sm hover:shadow-lg transition-all duration-300 hover:-translate-y-1" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
                 <div class="flex items-center gap-2 mb-4">
                   <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-purple-100 to-blue-100 dark:from-purple-900/30 dark:to-blue-900/30 flex items-center justify-center">
                     <span class="text-lg"><%= category_data[:category].split(' ').first %></span>
                   </div>
-                  <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wide">
+                    <h3 class="text-sm font-semibold uppercase tracking-wide" style="color: var(--text-primary);">
                     <%= category_data[:category].gsub(/^[^\s]+\s+/, '') %>
                   </h3>
                 </div>
@@ -122,7 +122,7 @@
                     <button
                       data-action="click->chat#useExample"
                       data-example="<%= example %>"
-                      class="w-full text-left px-4 py-3 text-sm rounded-lg bg-slate-50 dark:bg-slate-700/50 hover:bg-slate-100 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-600 hover:border-purple-300 dark:hover:border-purple-600 transition-all duration-200 group-hover:shadow-sm">
+                      class="w-full text-left px-4 py-3 text-sm rounded-lg border transition-all duration-200 group-hover:shadow-sm" style="background-color: var(--bg-tertiary); border-color: var(--border-color); color: var(--text-primary);" onmouseover="this.style.borderColor='var(--accent-primary)'; this.style.backgroundColor='var(--bg-secondary)'" onmouseout="this.style.borderColor='var(--border-color)'; this.style.backgroundColor='var(--bg-tertiary)'">
                       <%= example %>
                     </button>
                   <% end %>
@@ -135,12 +135,12 @@
         <!-- Centered Input with Modern Design -->
         <div class="mt-8 w-full max-w-3xl mx-auto">
           <form data-action="submit->chat#submit" class="relative">
-            <div class="relative bg-white dark:bg-slate-800 rounded-2xl border-2 border-slate-200 dark:border-slate-700 shadow-lg hover:shadow-xl transition-all duration-300 focus-within:border-purple-500 dark:focus-within:border-purple-500 focus-within:ring-4 focus-within:ring-purple-500/10">
+            <div class="relative rounded-2xl border-2 shadow-lg hover:shadow-xl transition-all duration-300 focus-within:ring-4" style="background-color: var(--bg-secondary); border-color: var(--border-color);" onfocusin="this.style.borderColor='var(--accent-primary)'; this.style.boxShadow='0 0 0 4px rgba(var(--accent-primary-rgb), 0.1)'" onfocusout="this.style.borderColor='var(--border-color)'; this.style.boxShadow=''">
               <div class="flex items-end gap-3 px-5 py-4">
                 <div class="flex-1 relative">
                   <textarea data-chat-target="promptCentered" rows="1"
                     placeholder="Message AI..."
-                    class="w-full bg-transparent border-0 px-0 py-0 text-base placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none resize-none overflow-hidden text-slate-900 dark:text-slate-100"
+                    class="w-full bg-transparent border-0 px-0 py-0 text-base focus:outline-none resize-none overflow-hidden" style="color: var(--text-primary);" placeholder="Message AI..."
                     style="min-height: 1.5rem; max-height: 12rem; line-height: 1.6;"></textarea>
                 </div>
                 <button data-chat-target="sendBtnCentered" type="submit"
@@ -151,9 +151,9 @@
                 </button>
               </div>
             </div>
-            <div class="mt-4 flex flex-col sm:flex-row items-center justify-center gap-4 text-xs text-slate-500 dark:text-slate-400">
-              <label class="flex items-center gap-2 cursor-pointer hover:text-slate-700 dark:hover:text-slate-300 transition-colors">
-                <input type="checkbox" data-chat-target="deepModeToggle" class="w-4 h-4 rounded border-slate-300 dark:border-slate-600 text-purple-500 focus:ring-purple-500 focus:ring-offset-0">
+            <div class="mt-4 flex flex-col sm:flex-row items-center justify-center gap-4 text-xs" style="color: var(--text-tertiary);">
+              <label class="flex items-center gap-2 cursor-pointer transition-colors" onmouseover="this.style.color='var(--text-secondary)'" onmouseout="this.style.color='var(--text-tertiary)'">
+                <input type="checkbox" data-chat-target="deepModeToggle" class="w-4 h-4 rounded focus:ring-2 focus:ring-offset-0" style="border-color: var(--border-color); accent-color: var(--accent-primary);">
                 <span>Deep Mode</span>
               </label>
               <span class="hidden sm:inline">•</span>
@@ -170,15 +170,15 @@
   </div>
 
   <!-- Bottom Input Area (Shown when messages exist) -->
-  <div data-chat-target="bottomInput" class="sticky bottom-0 z-30 hidden backdrop-blur-xl bg-white/80 dark:bg-slate-900/80 border-t border-slate-200/50 dark:border-slate-700/50 shadow-lg">
+  <div data-chat-target="bottomInput" class="sticky bottom-0 z-30 hidden backdrop-blur-xl border-t shadow-lg" style="background-color: rgba(var(--bg-secondary-rgb), 0.9); border-color: var(--border-color);">
     <form data-action="submit->chat#submit" class="w-full px-4 sm:px-6 py-4">
       <div class="max-w-4xl mx-auto">
-        <div class="relative bg-white dark:bg-slate-800 rounded-xl border-2 border-slate-200 dark:border-slate-700 shadow-md focus-within:border-purple-500 dark:focus-within:border-purple-500 focus-within:ring-4 focus-within:ring-purple-500/10 transition-all duration-200">
+          <div class="relative rounded-xl border-2 shadow-md focus-within:ring-4 transition-all duration-200" style="background-color: var(--bg-secondary); border-color: var(--border-color);" onfocusin="this.style.borderColor='var(--accent-primary)'; this.style.boxShadow='0 0 0 4px rgba(var(--accent-primary-rgb), 0.1)'" onfocusout="this.style.borderColor='var(--border-color)'; this.style.boxShadow=''">
           <div class="flex items-end gap-3 px-4 py-3">
             <div class="flex-1 relative">
               <textarea data-chat-target="prompt" rows="1"
                 placeholder="Message AI... (Enter to send, Shift+Enter for new line)"
-                class="w-full bg-transparent border-0 px-0 py-0 text-sm sm:text-base placeholder-slate-400 dark:placeholder-slate-500 resize-none overflow-hidden focus:outline-none text-slate-900 dark:text-slate-100"
+                class="w-full bg-transparent border-0 px-0 py-0 text-sm sm:text-base resize-none overflow-hidden focus:outline-none" style="color: var(--text-primary);" placeholder="Message AI... (Enter to send, Shift+Enter for new line)"
                 style="min-height: 2rem; max-height: 8rem; line-height: 1.6;"></textarea>
             </div>
             <button data-chat-target="sendBtn" type="submit"
@@ -189,9 +189,9 @@
             </button>
           </div>
         </div>
-        <div class="mt-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
-          <label class="flex items-center gap-2 cursor-pointer hover:text-slate-700 dark:hover:text-slate-300 transition-colors">
-            <input type="checkbox" data-chat-target="deepModeToggle" class="w-4 h-4 rounded border-slate-300 dark:border-slate-600 text-purple-500 focus:ring-purple-500 focus:ring-offset-0">
+        <div class="mt-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs" style="color: var(--text-tertiary);">
+          <label class="flex items-center gap-2 cursor-pointer transition-colors" onmouseover="this.style.color='var(--text-secondary)'" onmouseout="this.style.color='var(--text-tertiary)'">
+            <input type="checkbox" data-chat-target="deepModeToggle" class="w-4 h-4 rounded focus:ring-2 focus:ring-offset-0" style="border-color: var(--border-color); accent-color: var(--accent-primary);">
             <span>Deep Mode</span>
           </label>
           <span class="text-xs">💡 Trading queries auto-use Technical Analysis Agent</span>
